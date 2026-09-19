@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: tours-graphql-api
+  namespace: sample-apis
+  labels:
+    app: tours-graphql-api
+spec:
+  selector:
+    app: tours-graphql-api
+  ports:
+    - name: http
+      port: 4000
+      targetPort: 4000
+      protocol: TCP
+  type: ClusterIP

@@ -1,0 +1,48 @@
+# /etc/systemd/system/salary-api.service
+#
+# 설치 위치: /etc/systemd/system/salary-api.service
+# 애플리케이션 경로: /opt/sample-apis/api2-salary
+#
+# 활성화:
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now salary-api
+#
+[Unit]
+Description=Salary Management REST API (Python/FastAPI)
+Documentation=https://github.com/your-org/sample-apis
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=svcapi
+Group=svcapi
+WorkingDirectory=/opt/sample-apis/api2-salary
+
+# 환경변수 파일 (JWT_SECRET_KEY 등 민감 정보 포함)
+EnvironmentFile=/etc/sample-apis/salary-api.env
+
+# Python 가상환경의 uvicorn 실행
+ExecStart=/opt/sample-apis/api2-salary/venv/bin/uvicorn \
+    app.main:app \
+    --host 0.0.0.0 \
+    --port 8000 \
+    --workers 2
+
+# 재시작 정책
+Restart=on-failure
+RestartSec=5s
+
+# 로깅 — journald로 수집 (journalctl -u salary-api -f)
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=salary-api
+
+# 보안 강화 옵션
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/tmp
+
+[Install]
+WantedBy=multi-user.target

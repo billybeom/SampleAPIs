@@ -1,0 +1,877 @@
+# Tours Management GraphQL API — Schema Definition Language (SDL)
+# ================================================================
+#
+# 개요: 크루즈 여행사 관리 시스템을 위한 GraphQL API 스키마입니다.
+# IBM API Connect 샘플로 설계되었으며, GraphQL의 핵심 기능을 모두 시연합니다:
+#   - Query     : 단일/목록 조회, 연관 데이터 자동 fetch, 다중 필터
+#   - Mutation  : 생성/수정/삭제, 입력 유효성 검사, 충돌 감지
+#   - Subscription: 실시간 예약 이벤트 (개념적 선언)
+#   - Custom Scalars: Date, DateTime, EmailAddress
+#
+# 도메인 모델:
+#   Cruise (크루즈 상품) --> RoomType[]
+#   Customer (고객)      --> Address
+#   Booking (예약)       --> Cruise, Customer, BookedRoom
+#
+# 권한 모델 (API Connect 연동 시):
+#   GUEST    : 크루즈 목록/상세 조회만 가능
+#   CUSTOMER : 본인 예약 조회/생성/취소, 본인 정보 수정
+#   AGENT    : 모든 고객/예약 조회 및 수정
+#   ADMIN    : 모든 작업 (크루즈 관리 포함)
+
+# ── Custom Scalars ─────────────────────────────────────────────────────────────
+
+"""
+ISO 8601 날짜 (YYYY-MM-DD 형식)
+예: "2025-06-01"
+"""
+scalar Date
+
+"""
+ISO 8601 날짜+시간 (UTC, YYYY-MM-DDTHH:mm:ss.sssZ 형식)
+예: "2024-11-01T08:00:00.000Z"
+"""
+scalar DateTime
+
+"""
+RFC 5322 이메일 주소 형식
+예: "alice@tours.com"
+"""
+scalar EmailAddress
+
+# ── Enums ─────────────────────────────────────────────────────────────────────
+
+"""
+예약 상태
+"""
+enum BookingStatus {
+  """대기 중 — 결제 또는 확인 대기"""
+  PENDING
+
+  """확정됨 — 예약 확정 및 결제 완료"""
+  CONFIRMED
+
+  """취소됨 — 고객 또는 운영자에 의해 취소"""
+  CANCELLED
+
+  """완료됨 — 여행이 종료됨"""
+  COMPLETED
+}
+
+"""
+객실 유형 코드
+"""
+enum RoomTypeCode {
+  """인테리어 캐빈 (창문 없음, 가장 경제적)"""
+  INT
+
+  """발코니 캐빈 (개인 발코니, 바다 전망)"""
+  BAL
+
+  """스위트 (별도 거실, 풀 오션뷰, 버틀러 서비스)"""
+  STE
+}
+
+"""
+통화 코드 (ISO 4217)
+"""
+enum Currency {
+  """미국 달러"""
+  USD
+
+  """유로"""
+  EUR
+
+  """영국 파운드"""
+  GBP
+
+  """한국 원"""
+  KRW
+}
+
+"""
+정렬 방향
+"""
+enum SortDirection {
+  """오름차순"""
+  ASC
+
+  """내림차순"""
+  DESC
+}
+
+# ── Types ──────────────────────────────────────────────────────────────────────
+
+"""
+고객 주소 정보
+"""
+type Address {
+  """도로명 주소"""
+  street: String!
+
+  """도시"""
+  city: String!
+
+  """주/도 (해당 없으면 빈 문자열)"""
+  state: String
+
+  """우편번호"""
+  postalCode: String!
+
+  """국가 코드 (ISO 3166-1 alpha-3, 예: USA, KOR, GBR)"""
+  country: String!
+}
+
+"""
+객실 유형 — 크루즈별로 정의된 객실 카테고리 및 가격 정보
+"""
+type RoomType {
+  """객실 유형 코드"""
+  roomID: RoomTypeCode!
+
+  """객실 유형 이름 (예: Interior Cabin, Balcony Cabin, Suite)"""
+  name: String!
+
+  """객실 설명"""
+  description: String!
+
+  """최대 수용 인원"""
+  maxOccupancy: Int!
+
+  """1박당 가격"""
+  pricePerNight: Float!
+
+  """통화"""
+  currency: Currency!
+}
+
+"""
+크루즈 상품 — 항해 일정, 출발항, 객실 정보를 포함한 여행 상품
+"""
+type Cruise {
+  """크루즈 고유 ID (예: CRUISE-001)"""
+  cruiseID: ID!
+
+  """크루즈 이름 (예: Mediterranean Discovery)"""
+  title: String!
+
+  """크루즈 설명"""
+  description: String!
+
+  """출발일 (YYYY-MM-DD)"""
+  startDate: Date!
+
+  """도착일 (YYYY-MM-DD)"""
+  endDate: Date!
+
+  """출발항 (예: Barcelona, Miami, Copenhagen)"""
+  startPort: String!
+
+  """항해 일수"""
+  numDays: Int!
+
+  """이 크루즈에서 제공되는 객실 유형 목록"""
+  roomTypes: [RoomType!]!
+
+  """이 크루즈의 모든 예약 (Agent/Admin 권한 필요)"""
+  bookings: [Booking!]!
+
+  """이 크루즈의 예약 수"""
+  bookingCount: Int!
+}
+
+"""
+고객 — 예약 주체가 되는 여행자 정보
+"""
+type Customer {
+  """고객 고유 ID (이메일 주소)"""
+  emailAddress: EmailAddress!
+
+  """이름"""
+  firstName: String!
+
+  """성"""
+  lastName: String!
+
+  """전체 이름 (firstName + lastName 자동 조합)"""
+  fullName: String!
+
+  """연락처 전화번호"""
+  phone: String!
+
+  """거주 주소"""
+  address: Address!
+
+  """계정 생성 일시"""
+  createdAt: DateTime!
+
+  """이 고객의 모든 예약 목록"""
+  bookings: [Booking!]!
+
+  """이 고객의 예약 수"""
+  bookingCount: Int!
+}
+
+"""
+예약된 객실 정보
+"""
+type BookedRoom {
+  """객실 유형 코드"""
+  roomID: RoomTypeCode!
+
+  """예약 객실 수"""
+  numRooms: Int!
+
+  """객실 상세 정보 (크루즈의 roomTypes에서 자동 조회)"""
+  details: RoomType
+}
+
+"""
+예약 — 고객과 크루즈를 연결하는 핵심 도메인 객체.
+예약 생성 시 크루즈와 고객이 실제로 존재하는지 검증합니다.
+"""
+type Booking {
+  """예약 고유 ID (자동 증가 정수)"""
+  bookingID: ID!
+
+  """예약 상태"""
+  status: BookingStatus!
+
+  """예약한 크루즈 상세 정보 (자동 조인)"""
+  cruise: Cruise!
+
+  """예약한 고객 상세 정보 (자동 조인)"""
+  customer: Customer!
+
+  """예약 객실 정보"""
+  room: BookedRoom!
+
+  """탑승 인원"""
+  numPassengers: Int!
+
+  """예약 생성 일시"""
+  bookedAt: DateTime!
+
+  """마지막 수정 일시"""
+  updatedAt: DateTime
+}
+
+# ── Connection / Pagination Types ─────────────────────────────────────────────
+
+"""
+크루즈 목록 페이지네이션 결과
+"""
+type CruiseConnection {
+  """전체 크루즈 수"""
+  total: Int!
+
+  """현재 페이지 크루즈 목록"""
+  items: [Cruise!]!
+}
+
+"""
+고객 목록 페이지네이션 결과
+"""
+type CustomerConnection {
+  """전체 고객 수"""
+  total: Int!
+
+  """현재 페이지 고객 목록"""
+  items: [Customer!]!
+}
+
+"""
+예약 목록 페이지네이션 결과
+"""
+type BookingConnection {
+  """전체 예약 수"""
+  total: Int!
+
+  """현재 페이지 예약 목록"""
+  items: [Booking!]!
+}
+
+# ── Mutation Payloads ─────────────────────────────────────────────────────────
+
+"""
+고객 생성/수정 Mutation 결과
+"""
+type CustomerPayload {
+  """처리 성공 여부"""
+  success: Boolean!
+
+  """결과 메시지"""
+  message: String!
+
+  """생성/수정된 고객 객체 (성공 시 반환)"""
+  customer: Customer
+}
+
+"""
+예약 생성/수정 Mutation 결과
+"""
+type BookingPayload {
+  """처리 성공 여부"""
+  success: Boolean!
+
+  """결과 메시지"""
+  message: String!
+
+  """생성/수정된 예약 객체 (성공 시 반환)"""
+  booking: Booking
+}
+
+"""
+삭제 Mutation 공통 결과
+"""
+type DeletePayload {
+  """삭제 성공 여부"""
+  success: Boolean!
+
+  """결과 메시지"""
+  message: String!
+
+  """삭제된 항목의 ID"""
+  deletedId: ID!
+}
+
+# ── Input Types ───────────────────────────────────────────────────────────────
+
+"""
+크루즈 목록 필터 입력
+모든 필드는 선택 사항이며, 복수 조건 지정 시 AND로 결합됩니다.
+"""
+input CruiseFilterInput {
+  """출발일 이후 (YYYY-MM-DD, 이상)"""
+  startDateFrom: Date
+
+  """출발일 이전 (YYYY-MM-DD, 이하)"""
+  startDateTo: Date
+
+  """출발항 (부분 일치 검색)"""
+  startPort: String
+
+  """최대 항해 일수 (이하)"""
+  maxNumDays: Int
+
+  """최소 항해 일수 (이상)"""
+  minNumDays: Int
+}
+
+"""
+고객 목록 필터 입력
+"""
+input CustomerFilterInput {
+  """국가 코드 (정확히 일치, 예: USA, KOR)"""
+  country: String
+
+  """이름 검색 (firstName 또는 lastName 부분 일치)"""
+  nameSearch: String
+}
+
+"""
+예약 목록 필터 입력
+"""
+input BookingFilterInput {
+  """특정 크루즈 ID"""
+  cruiseID: ID
+
+  """특정 고객 이메일"""
+  customerID: EmailAddress
+
+  """예약 상태 필터"""
+  status: BookingStatus
+}
+
+"""
+페이지네이션 입력
+"""
+input PaginationInput {
+  """건너뛸 항목 수 (기본값: 0)"""
+  offset: Int = 0
+
+  """가져올 항목 수 (기본값: 20, 최대: 100)"""
+  limit: Int = 20
+}
+
+"""
+고객 주소 입력
+"""
+input AddressInput {
+  """도로명 주소"""
+  street: String!
+
+  """도시"""
+  city: String!
+
+  """주/도"""
+  state: String
+
+  """우편번호"""
+  postalCode: String!
+
+  """국가 코드 (ISO 3166-1 alpha-3)"""
+  country: String!
+}
+
+"""
+고객 생성 입력
+모든 필드가 필수입니다.
+"""
+input CreateCustomerInput {
+  """이메일 주소 (고객 고유 ID로 사용됨)"""
+  emailAddress: EmailAddress!
+
+  """이름"""
+  firstName: String!
+
+  """성"""
+  lastName: String!
+
+  """연락처 전화번호"""
+  phone: String!
+
+  """거주 주소"""
+  address: AddressInput!
+}
+
+"""
+고객 수정 입력
+이메일 주소를 제외한 모든 필드를 수정할 수 있습니다.
+"""
+input UpdateCustomerInput {
+  """이름"""
+  firstName: String
+
+  """성"""
+  lastName: String
+
+  """연락처 전화번호"""
+  phone: String
+
+  """거주 주소"""
+  address: AddressInput
+}
+
+"""
+예약 생성 입력
+"""
+input CreateBookingInput {
+  """예약할 크루즈 ID"""
+  cruiseID: ID!
+
+  """예약 고객 이메일 (고객이 사전 등록되어 있어야 함)"""
+  customerID: EmailAddress!
+
+  """예약 객실 정보"""
+  room: BookedRoomInput!
+
+  """탑승 인원"""
+  numPassengers: Int!
+}
+
+"""
+예약 수정 입력
+"""
+input UpdateBookingInput {
+  """예약 상태 변경"""
+  status: BookingStatus
+
+  """객실 변경"""
+  room: BookedRoomInput
+
+  """탑승 인원 변경"""
+  numPassengers: Int
+}
+
+"""
+예약 객실 입력
+"""
+input BookedRoomInput {
+  """객실 유형 코드"""
+  roomID: RoomTypeCode!
+
+  """예약 객실 수 (최소 1)"""
+  numRooms: Int!
+}
+
+# ── Root Types ─────────────────────────────────────────────────────────────────
+
+"""
+# Query — 데이터 조회
+
+모든 Query는 읽기 전용이며 데이터를 변경하지 않습니다.
+
+## 연관 데이터 자동 로딩
+GraphQL의 장점을 활용하여 하나의 쿼리로 연관 데이터를 모두 가져올 수 있습니다:
+```graphql
+query {
+  booking(bookingID: "1001") {
+    cruise { title startDate }      # 크루즈 정보 자동 join
+    customer { firstName lastName } # 고객 정보 자동 join
+    room { details { pricePerNight } }
+  }
+}
+```
+"""
+type Query {
+  # ── Cruise Queries ────────────────────────────────────────────────────────
+
+  """
+  전체 크루즈 목록을 조회합니다.
+  필터 및 페이지네이션을 지원합니다.
+
+  **예시:**
+  ```graphql
+  query {
+    cruises(filter: { startPort: "Barcelona", maxNumDays: 14 }) {
+      total
+      items { cruiseID title startDate numDays }
+    }
+  }
+  ```
+  """
+  cruises(
+    """크루즈 목록 필터 조건"""
+    filter: CruiseFilterInput
+
+    """페이지네이션"""
+    pagination: PaginationInput
+  ): CruiseConnection!
+
+  """
+  특정 크루즈를 ID로 조회합니다.
+  존재하지 않으면 null을 반환합니다.
+
+  **예시:**
+  ```graphql
+  query {
+    cruise(cruiseID: "CRUISE-001") {
+      title
+      roomTypes { name pricePerNight }
+      bookingCount
+    }
+  }
+  ```
+  """
+  cruise(
+    """조회할 크루즈 ID"""
+    cruiseID: ID!
+  ): Cruise
+
+  # ── Customer Queries ──────────────────────────────────────────────────────
+
+  """
+  전체 고객 목록을 조회합니다.
+  필터 및 페이지네이션을 지원합니다.
+
+  **예시:**
+  ```graphql
+  query {
+    customers(filter: { country: "USA" }) {
+      total
+      items { emailAddress fullName bookingCount }
+    }
+  }
+  ```
+  """
+  customers(
+    """고객 목록 필터 조건"""
+    filter: CustomerFilterInput
+
+    """페이지네이션"""
+    pagination: PaginationInput
+  ): CustomerConnection!
+
+  """
+  특정 고객을 이메일 주소로 조회합니다.
+  존재하지 않으면 null을 반환합니다.
+
+  **예시:**
+  ```graphql
+  query {
+    customer(emailAddress: "alice@tours.com") {
+      fullName
+      bookings {
+        bookingID
+        cruise { title startDate }
+        status
+      }
+    }
+  }
+  ```
+  """
+  customer(
+    """조회할 고객 이메일 주소"""
+    emailAddress: EmailAddress!
+  ): Customer
+
+  # ── Booking Queries ───────────────────────────────────────────────────────
+
+  """
+  전체 예약 목록을 조회합니다.
+  크루즈, 고객, 상태로 필터링할 수 있습니다.
+
+  **예시:**
+  ```graphql
+  query {
+    bookings(filter: { status: CONFIRMED }) {
+      total
+      items {
+        bookingID
+        cruise { title }
+        customer { fullName }
+        room { roomID numRooms }
+      }
+    }
+  }
+  ```
+  """
+  bookings(
+    """예약 목록 필터 조건"""
+    filter: BookingFilterInput
+
+    """페이지네이션"""
+    pagination: PaginationInput
+  ): BookingConnection!
+
+  """
+  특정 예약을 ID로 조회합니다.
+  존재하지 않으면 null을 반환합니다.
+
+  **예시:**
+  ```graphql
+  query {
+    booking(bookingID: "1001") {
+      status
+      cruise { title startDate endDate }
+      customer { fullName phone }
+      room { roomID details { name pricePerNight } }
+      numPassengers
+      bookedAt
+    }
+  }
+  ```
+  """
+  booking(
+    """조회할 예약 ID"""
+    bookingID: ID!
+  ): Booking
+}
+
+"""
+# Mutation — 데이터 변경
+
+Mutation은 데이터를 생성, 수정, 삭제합니다.
+모든 Mutation은 성공 여부와 메시지를 포함하는 Payload 타입을 반환합니다.
+
+## 에러 처리
+- 존재하지 않는 리소스 참조 → 에러 반환 (success: false)
+- 중복 데이터 생성 시도 → 에러 반환 (success: false)
+- 유효하지 않은 입력 → GraphQL 유효성 검사 에러
+"""
+type Mutation {
+  # ── Customer Mutations ────────────────────────────────────────────────────
+
+  """
+  새 고객을 등록합니다.
+  같은 이메일 주소의 고객이 이미 존재하면 에러를 반환합니다.
+
+  **예시:**
+  ```graphql
+  mutation {
+    createCustomer(input: {
+      emailAddress: "dave@tours.com"
+      firstName: "Dave"
+      lastName: "Brown"
+      phone: "+1-555-0104"
+      address: {
+        street: "321 Sunset Blvd"
+        city: "Los Angeles"
+        state: "CA"
+        postalCode: "90001"
+        country: "USA"
+      }
+    }) {
+      success
+      message
+      customer { emailAddress fullName createdAt }
+    }
+  }
+  ```
+  """
+  createCustomer(
+    """고객 생성 입력 데이터"""
+    input: CreateCustomerInput!
+  ): CustomerPayload!
+
+  """
+  기존 고객 정보를 수정합니다.
+  수정할 필드만 입력하면 됩니다 (나머지 필드 유지).
+
+  **예시:**
+  ```graphql
+  mutation {
+    updateCustomer(
+      emailAddress: "alice@tours.com"
+      input: { phone: "+1-555-9999" }
+    ) {
+      success
+      customer { emailAddress phone }
+    }
+  }
+  ```
+  """
+  updateCustomer(
+    """수정할 고객 이메일 주소"""
+    emailAddress: EmailAddress!
+
+    """수정할 필드"""
+    input: UpdateCustomerInput!
+  ): CustomerPayload!
+
+  """
+  고객을 삭제합니다.
+  활성 예약(CONFIRMED/PENDING 상태)이 있으면 삭제할 수 없습니다.
+
+  **예시:**
+  ```graphql
+  mutation {
+    deleteCustomer(emailAddress: "dave@tours.com") {
+      success
+      message
+      deletedId
+    }
+  }
+  ```
+  """
+  deleteCustomer(
+    """삭제할 고객 이메일 주소"""
+    emailAddress: EmailAddress!
+  ): DeletePayload!
+
+  # ── Booking Mutations ─────────────────────────────────────────────────────
+
+  """
+  새 예약을 생성합니다.
+  지정한 cruiseID와 customerID가 실제로 존재하는지 검증합니다.
+  크루즈의 roomTypes에 해당 roomID가 있는지도 확인합니다.
+
+  **예시:**
+  ```graphql
+  mutation {
+    createBooking(input: {
+      cruiseID: "CRUISE-002"
+      customerID: "carol@tours.com"
+      room: { roomID: BAL, numRooms: 1 }
+      numPassengers: 2
+    }) {
+      success
+      message
+      booking {
+        bookingID
+        status
+        cruise { title startDate }
+        room { roomID details { pricePerNight } }
+      }
+    }
+  }
+  ```
+  """
+  createBooking(
+    """예약 생성 입력 데이터"""
+    input: CreateBookingInput!
+  ): BookingPayload!
+
+  """
+  기존 예약을 수정합니다.
+  CANCELLED 또는 COMPLETED 상태의 예약은 수정할 수 없습니다.
+
+  **예시:**
+  ```graphql
+  mutation {
+    updateBooking(
+      bookingID: "1001"
+      input: { numPassengers: 3 }
+    ) {
+      success
+      booking { bookingID numPassengers updatedAt }
+    }
+  }
+  ```
+  """
+  updateBooking(
+    """수정할 예약 ID"""
+    bookingID: ID!
+
+    """수정할 필드"""
+    input: UpdateBookingInput!
+  ): BookingPayload!
+
+  """
+  예약을 취소(삭제)합니다.
+  COMPLETED 상태의 예약은 삭제할 수 없습니다.
+
+  **예시:**
+  ```graphql
+  mutation {
+    deleteBooking(bookingID: "1001") {
+      success
+      message
+      deletedId
+    }
+  }
+  ```
+  """
+  deleteBooking(
+    """삭제할 예약 ID"""
+    bookingID: ID!
+  ): DeletePayload!
+}
+
+"""
+# Subscription — 실시간 이벤트
+
+WebSocket을 통해 예약 변경 이벤트를 실시간으로 구독합니다.
+IBM API Connect의 AsyncAPI/WebSocket 지원과 연동 가능합니다.
+
+> **참고**: 이 서버는 in-memory PubSub으로 구현되어 있습니다.
+> 프로덕션 환경에서는 Redis PubSub 또는 Apache Kafka 연동을 권장합니다.
+"""
+type Subscription {
+  """
+  예약 생성/수정/취소 이벤트를 실시간으로 수신합니다.
+
+  **예시:**
+  ```graphql
+  subscription {
+    bookingUpdated {
+      bookingID
+      status
+      cruise { title }
+      customer { fullName }
+    }
+  }
+  ```
+  """
+  bookingUpdated: Booking!
+
+  """
+  특정 크루즈의 예약 이벤트만 구독합니다.
+
+  **예시:**
+  ```graphql
+  subscription {
+    cruiseBookingUpdated(cruiseID: "CRUISE-001") {
+      bookingID
+      status
+      customer { fullName }
+    }
+  }
+  ```
+  """
+  cruiseBookingUpdated(
+    """구독할 크루즈 ID"""
+    cruiseID: ID!
+  ): Booking!
+}

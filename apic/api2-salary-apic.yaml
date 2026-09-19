@@ -1,0 +1,467 @@
+# =============================================================================
+# IBM API Connect — Salary Management API Assembly
+#
+# API 2: Salary Management API (Keycloak OAuth2 + RBAC)
+# 대상 백엔드: http://salary-api:8001
+#
+# 정책 흐름 (OAuth2 Outbound Token 패턴):
+#
+#   [Client]
+#       │ ①  Keycloak Access Token 발급
+#       ▼
+#   [API Connect]
+#       │ ②  토큰 유효성 검증 (introspect or JWKS)
+#       │ ③  set-variable: Outbound 헤더에 토큰 복사
+#       │ ④  invoke: 백엔드 호출 (Authorization 헤더 포함)
+#       ▼
+#   [Salary API]
+#       │ ⑤  Keycloak JWKS 재검증 → 역할 확인 → 응답
+#
+# IBM API Connect 관리 콘솔에서 아래 설정이 필요합니다:
+#   - OAuth Provider: Keycloak (Third-Party)
+#   - TLS Client Profile: Keycloak 서버 인증서 신뢰
+#   - User Registry: OIDC (Keycloak OIDC Discovery URL)
+# =============================================================================
+
+swagger: "2.0"
+info:
+  title: Salary Management API
+  description: |
+    연봉 관리 API — Keycloak OAuth2/OIDC + IBM API Connect RBAC 샘플
+    
+    ## 인증 방식
+    - OAuth 2.0 Bearer Token (Keycloak 발급)
+    - 역할: `employee` / `manager` / `hr_system`
+    
+    ## 권한 매트릭스
+    | 역할 | GET /salaries/me | GET /salaries/team | GET /salaries | DELETE |
+    |------|------------------|--------------------|---------------|--------|
+    | employee | ✓ (본인) | ✗ | ✗ | ✗ |
+    | manager | ✓ | ✓ (소속 팀) | ✗ | ✗ |
+    | hr_system | ✓ | ✓ | ✓ | ✓ |
+    
+    ## IBM API Connect Outbound Token 패턴
+    API Connect가 Keycloak 토큰을 검증한 후,
+    동일 토큰을 `Authorization` 헤더에 그대로 포함해 백엔드로 전달합니다.
+    백엔드(Salary API)는 토큰을 JWKS로 재검증하여 역할 기반 권한을 수행합니다.
+  version: "2.0.0"
+  x-ibm-name: salary-management-api
+basePath: /salary/v2
+schemes:
+  - https
+consumes:
+  - application/json
+produces:
+  - application/json
+
+# ── Security 정의 ─────────────────────────────────────────────────────────
+securityDefinitions:
+  # API Connect에서 Keycloak을 Third-Party OAuth Provider로 등록한 경우
+  keycloak-oauth2:
+    type: oauth2
+    description: |
+      Keycloak OAuth 2.0 (corp realm)
+      
+      Token URL: http://keycloak:8080/realms/corp/protocol/openid-connect/token
+      JWKS URL:  http://keycloak:8080/realms/corp/protocol/openid-connect/certs
+      
+      API Connect 설정:
+        - Type: Third Party
+        - Introspect URL: http://keycloak:8080/realms/corp/protocol/openid-connect/token/introspect
+        - Client ID: salary-api
+        - Client Secret: salary-api-secret
+    flow: application
+    tokenUrl: https://keycloak.example.com/realms/corp/protocol/openid-connect/token
+    scopes:
+      openid: OpenID 기본 스코프
+      profile: 사용자 프로필 (name, preferred_username)
+      email: 이메일 주소
+
+security:
+  - keycloak-oauth2:
+      - openid
+      - profile
+
+# ── IBM API Connect 카탈로그 설정 ────────────────────────────────────────
+x-ibm-configuration:
+  testable: true
+  enforced: true
+  phase: realized
+
+  # ── OAuth Provider 연결 (API Connect 관리 콘솔에서 미리 등록 필요) ─────
+  # oauth-providers:
+  #   - name: keycloak-corp
+  #     provider-type: third-party
+  #     introspect-url: $(keycloak-introspect-url)
+  #     client-id: salary-api
+  #     client-secret: salary-api-secret
+
+  assembly:
+    execute:
+
+      # ─────────────────────────────────────────────────────────────────────
+      # Step 1: 토큰 유효성 검증
+      #
+      # 방법 A (권장) — API Connect OAuth 정책 사용:
+      #   API Connect가 Keycloak Introspect 엔드포인트로 토큰 검증
+      #
+      # 방법 B — 백엔드 직접 JWKS 검증 (이 샘플에서 사용):
+      #   API Connect는 토큰을 그대로 전달, Salary API가 JWKS로 재검증
+      # ─────────────────────────────────────────────────────────────────────
+
+      # [방법 A: API Connect oauth 정책 사용 시 주석 해제]
+      # - oauth:
+      #     version: 2.0.0
+      #     title: Validate Keycloak Token
+      #     description: Keycloak 토큰 검증
+      #     provider: keycloak-corp
+      #     output: decoded-token
+
+      # Step 2: 백엔드 요청 헤더 구성
+      - set-variable:
+          version: 2.0.0
+          title: Set Outbound Headers
+          description: |
+            Keycloak Access Token을 백엔드로 전달합니다.
+            백엔드(Salary API)는 이 토큰을 JWKS로 재검증합니다.
+          actions:
+            # API Connect Gateway 식별 헤더
+            - set: message.headers.X-API-Gateway
+              value: IBM-API-Connect
+              type: string
+
+            # Request 추적 ID
+            - set: message.headers.X-Request-ID
+              value: $(request.headers.x-request-id)
+              type: string
+
+            # ── Outbound Token 전달 ────────────────────────────────────────
+            # 클라이언트가 보낸 Authorization 헤더를 그대로 백엔드로 전달
+            # (API Connect가 토큰을 검증 후 동일 헤더를 포함해 invoke)
+            - set: message.headers.Authorization
+              value: $(request.headers.authorization)
+              type: string
+
+            # 선택: API Connect가 decoded 클레임에서 역할 정보를 추출해 별도 헤더로 전달
+            # (방법 A에서 oauth 정책 사용 후 decoded-token 활용 시)
+            # - set: message.headers.X-User-Role
+            #   value: $(decoded-token.realm_access.roles)
+            #   type: string
+            # - set: message.headers.X-User-Sub
+            #   value: $(decoded-token.sub)
+            #   type: string
+            # - set: message.headers.X-User-Department
+            #   value: $(decoded-token.department)
+            #   type: string
+
+      # Step 3: 백엔드 호출
+      - invoke:
+          version: 2.2.0
+          title: Invoke Salary Backend
+          target-url: $(target-url)$(request.path)$(request.search)
+          verb: keep
+          follow-redirects: false
+          timeout: 30
+          compression: false
+          output: message
+          # TLS 설정 (HTTPS 백엔드인 경우)
+          # tls-profile: default-ssl-profile
+
+    # ── 에러 핸들러 ──────────────────────────────────────────────────────
+    catch:
+      - errors:
+          - ConnectionError
+          - JavaScriptError
+        execute:
+          - set-variable:
+              version: 2.0.0
+              title: Set Error Response
+              actions:
+                - set: message.status.code
+                  value: 503
+                  type: number
+                - set: message.headers.Content-Type
+                  value: application/json
+                  type: string
+                - set: message.body
+                  value: '{"detail":"Backend service unavailable. Please try again later."}'
+                  type: string
+
+  # ── Catalog Properties ──────────────────────────────────────────────────
+  properties:
+    target-url:
+      value: http://salary-api:8001
+      description: 백엔드 Salary API URL
+      encoded: false
+    keycloak-introspect-url:
+      value: http://keycloak:8080/realms/corp/protocol/openid-connect/token/introspect
+      description: Keycloak 토큰 Introspect URL
+      encoded: false
+    keycloak-jwks-url:
+      value: http://keycloak:8080/realms/corp/protocol/openid-connect/certs
+      description: Keycloak JWKS URL
+      encoded: false
+
+  # ── CORS ────────────────────────────────────────────────────────────────
+  cors:
+    enabled: true
+
+# ── 경로 정의 ────────────────────────────────────────────────────────────────
+paths:
+
+  # ── 공개 엔드포인트 ──────────────────────────────────────────────────────
+  /health:
+    get:
+      summary: 헬스 체크
+      operationId: health
+      security: []              # 인증 불필요
+      responses:
+        "200":
+          description: 정상
+          schema:
+            $ref: "#/definitions/HealthResponse"
+
+  /auth/config:
+    get:
+      summary: Keycloak 설정 정보 조회
+      operationId: getAuthConfig
+      security: []              # 인증 불필요 (설정 확인용 공개 엔드포인트)
+      responses:
+        "200":
+          description: Keycloak 설정
+
+  /auth/jwks-status:
+    get:
+      summary: JWKS 캐시 상태 확인
+      operationId: getJwksStatus
+      security: []
+      responses:
+        "200":
+          description: JWKS 상태
+
+  # ── 인증 필요 엔드포인트 ─────────────────────────────────────────────────
+  /auth/me:
+    get:
+      summary: 현재 인증된 사용자 정보
+      operationId: getMe
+      responses:
+        "200":
+          description: 사용자 정보 (Keycloak claims 포함)
+          schema:
+            $ref: "#/definitions/UserInfo"
+        "401":
+          $ref: "#/responses/Unauthorized"
+
+  /salaries/me:
+    get:
+      summary: 내 연봉 조회
+      description: |
+        모든 역할이 본인 연봉을 조회할 수 있습니다.
+        employee_id는 Keycloak `sub` 클레임(UUID)과 매핑됩니다.
+      operationId: getMysal
+      responses:
+        "200":
+          description: 내 연봉 정보
+          schema:
+            $ref: "#/definitions/SalaryRecord"
+        "401":
+          $ref: "#/responses/Unauthorized"
+        "404":
+          $ref: "#/responses/NotFound"
+    put:
+      summary: 내 연봉 수정 (employee 본인 수정)
+      operationId: updateMySalary
+      parameters:
+        - in: body
+          name: body
+          schema:
+            $ref: "#/definitions/SalaryUpdate"
+      responses:
+        "200":
+          description: 수정된 연봉 정보
+        "401":
+          $ref: "#/responses/Unauthorized"
+        "403":
+          $ref: "#/responses/Forbidden"
+
+  /salaries/team:
+    get:
+      summary: 팀 연봉 목록 조회 (manager, hr_system)
+      description: |
+        - `manager`: 자신이 속한 부서(department)의 팀원 연봉 조회
+        - `hr_system`: 모든 팀 연봉 조회
+        - `employee`: 403 Forbidden
+      operationId: getTeamSalaries
+      responses:
+        "200":
+          description: 팀 연봉 목록
+          schema:
+            type: array
+            items:
+              $ref: "#/definitions/SalaryRecord"
+        "401":
+          $ref: "#/responses/Unauthorized"
+        "403":
+          $ref: "#/responses/Forbidden"
+
+  /salaries:
+    get:
+      summary: 전체 연봉 목록 (hr_system 전용)
+      operationId: getAllSalaries
+      responses:
+        "200":
+          description: 전체 연봉 목록
+          schema:
+            type: array
+            items:
+              $ref: "#/definitions/SalaryRecord"
+        "401":
+          $ref: "#/responses/Unauthorized"
+        "403":
+          $ref: "#/responses/Forbidden"
+
+  /salaries/{employee_id}:
+    parameters:
+      - name: employee_id
+        in: path
+        required: true
+        type: string
+        description: Keycloak sub (UUID)
+    get:
+      summary: 특정 직원 연봉 조회
+      operationId: getSalary
+      description: |
+        - `employee`: 본인만 조회 가능
+        - `manager`: 소속 팀 직원 조회 가능
+        - `hr_system`: 모든 직원 조회 가능
+      responses:
+        "200":
+          description: 연봉 정보
+          schema:
+            $ref: "#/definitions/SalaryRecord"
+        "401":
+          $ref: "#/responses/Unauthorized"
+        "403":
+          $ref: "#/responses/Forbidden"
+        "404":
+          $ref: "#/responses/NotFound"
+    put:
+      summary: 특정 직원 연봉 수정 (manager 이상)
+      operationId: updateSalary
+      parameters:
+        - in: body
+          name: body
+          schema:
+            $ref: "#/definitions/SalaryUpdate"
+      responses:
+        "200":
+          description: 수정된 연봉 정보
+        "401":
+          $ref: "#/responses/Unauthorized"
+        "403":
+          $ref: "#/responses/Forbidden"
+        "404":
+          $ref: "#/responses/NotFound"
+    delete:
+      summary: 연봉 레코드 삭제 (hr_system 전용)
+      description: |
+        퇴사 처리 프로세스에서 HR 시스템이 호출합니다.
+        employee 또는 manager 역할은 403을 반환합니다.
+      operationId: deleteSalary
+      responses:
+        "204":
+          description: 삭제 완료
+        "401":
+          $ref: "#/responses/Unauthorized"
+        "403":
+          $ref: "#/responses/Forbidden"
+        "404":
+          $ref: "#/responses/NotFound"
+
+# ── 공통 응답 ────────────────────────────────────────────────────────────────
+responses:
+  Unauthorized:
+    description: |
+      인증 실패 — 토큰이 없거나 유효하지 않습니다.
+      Authorization: Bearer <keycloak_access_token> 헤더를 포함하세요.
+    schema:
+      $ref: "#/definitions/ErrorResponse"
+  Forbidden:
+    description: |
+      권한 없음 — 이 리소스에 접근할 권한이 없습니다.
+      역할 매트릭스를 확인하세요.
+    schema:
+      $ref: "#/definitions/ErrorResponse"
+  NotFound:
+    description: 리소스를 찾을 수 없습니다.
+    schema:
+      $ref: "#/definitions/ErrorResponse"
+
+# ── 스키마 ───────────────────────────────────────────────────────────────────
+definitions:
+  SalaryRecord:
+    type: object
+    properties:
+      employee_id:
+        type: string
+        description: Keycloak sub (UUID)
+        example: "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+      name:
+        type: string
+        example: "Alice Kim"
+      team:
+        type: string
+        example: "engineering"
+      base_salary:
+        type: integer
+        description: 기본 연봉 (원)
+        example: 60000000
+      bonus:
+        type: integer
+        description: 성과급 (원)
+        example: 5000000
+      currency:
+        type: string
+        example: "KRW"
+      updated_at:
+        type: string
+        format: date-time
+  SalaryUpdate:
+    type: object
+    properties:
+      base_salary:
+        type: integer
+        example: 65000000
+      bonus:
+        type: integer
+        example: 6000000
+  UserInfo:
+    type: object
+    properties:
+      id:
+        type: string
+      username:
+        type: string
+      email:
+        type: string
+      full_name:
+        type: string
+      role:
+        type: string
+        enum: [employee, manager, hr_system]
+      team:
+        type: string
+  HealthResponse:
+    type: object
+    properties:
+      status:
+        type: string
+        example: ok
+      timestamp:
+        type: string
+        format: date-time
+  ErrorResponse:
+    type: object
+    properties:
+      detail:
+        type: string

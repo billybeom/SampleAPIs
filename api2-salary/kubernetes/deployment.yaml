@@ -1,0 +1,93 @@
+# ── API 2: Salary Management API — Kubernetes Deployment ─────────────────────
+# namespace : sample-apis
+# image     : 실제 레지스트리 경로로 교체하세요.
+#   예) ghcr.io/your-org/salary-api:latest
+#       your-registry.example.com/sample-apis/salary-api:latest
+#
+# 사전 요건:
+#   1. kubectl apply -f kubernetes/namespace.yaml
+#   2. kubectl apply -f kubernetes/configmap.yaml -n sample-apis
+#
+# OpenShift와의 차이:
+#   - ImageStream 없음 (레지스트리 직접 참조)
+#   - imagePullSecrets 추가 (프라이빗 레지스트리 사용 시)
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: salary-api
+  namespace: sample-apis
+  labels:
+    app: salary-api
+    app.kubernetes.io/part-of: sample-apis
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: salary-api
+  template:
+    metadata:
+      labels:
+        app: salary-api
+    spec:
+      # 프라이빗 레지스트리 사용 시 주석 해제
+      # imagePullSecrets:
+      #   - name: registry-credentials
+      containers:
+        - name: salary-api
+          image: your-registry.example.com/sample-apis/salary-api:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+              protocol: TCP
+          env:
+            # ── Keycloak 연동 설정 (ConfigMap에서 주입) ───────────────────────
+            - name: KEYCLOAK_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: salary-api-config
+                  key: keycloak-url
+            - name: KEYCLOAK_REALM
+              valueFrom:
+                configMapKeyRef:
+                  name: salary-api-config
+                  key: keycloak-realm
+            - name: KEYCLOAK_AUDIENCE
+              valueFrom:
+                configMapKeyRef:
+                  name: salary-api-config
+                  key: keycloak-audience
+            # ── API Connect outbound 토큰 헤더 이름 ───────────────────────────
+            - name: TOKEN_HEADER_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: salary-api-config
+                  key: token-header-name
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities:
+              drop:
+                - ALL
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault

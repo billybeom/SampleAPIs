@@ -1,0 +1,22 @@
+# TLS edge termination — OpenShift Router가 HTTPS를 처리하고 Pod에는 HTTP로 전달
+# host 값을 실제 클러스터 도메인으로 교체하세요.
+#   예) tours-api.apps.your-cluster.example.com
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: tours-api
+  namespace: sample-apis
+  labels:
+    app: tours-api
+spec:
+  host: tours-api.apps.your-cluster.example.com
+  to:
+    kind: Service
+    name: tours-api
+    weight: 100
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None

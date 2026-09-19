@@ -1,0 +1,1176 @@
+openapi: "3.0.3"
+
+info:
+  title: Salary Management API
+  version: "2.0.0"
+  description: |
+    직원 연봉 정보를 관리하는 RBAC(역할 기반 접근제어) REST API입니다.
+    IBM API Connect 샘플로 설계되었으며, 외부 IdP **Keycloak** OIDC/JWKS 연동 및
+    API Connect Outbound 토큰 재검증 패턴을 시연합니다.
+
+    ## 인증 흐름
+
+    ```
+    Client → Keycloak(①토큰발급) → API Connect(②1차검증 + ③헤더 전달)
+           → Salary API(④JWKS 재검증 → ⑤역할/팀 기반 권한 결정)
+    ```
+
+    1. 클라이언트가 **Keycloak**에서 Access Token 발급 (`realm_access.roles` 클레임 포함)
+    2. API Connect가 토큰을 1차 검증 후 백엔드로 **Outbound 전달**
+    3. 이 API가 Keycloak **JWKS**로 서명을 **직접 재검증** (Defense in Depth)
+    4. `realm_access.roles` 또는 `resource_access.salary-api.roles` 클레임으로 역할 결정
+
+    ## 역할 권한 매트릭스
+
+    | Role       | GET /salaries/me | GET /salaries | GET /salaries/{id} | PATCH /salaries/{id} | DELETE /salaries/{id} |
+    |------------|:---:|:---:|:---:|:---:|:---:|
+    | employee   | ✅ (본인) | 본인만 | 본인만 | 본인만 | ❌ |
+    | manager    | ✅ (본인) | 팀 전체 | 팀만 | 팀만 | ❌ |
+    | hr_system  | ✅ | 전체 | 전체 | 전체 | ✅ |
+
+    ## Keycloak 클레임 매핑
+
+    | Keycloak 클레임 | 이 API 필드 | 설명 |
+    |----------------|------------|------|
+    | `sub` | `id` | 사용자 고유 ID (연봉 레코드 employee_id와 1:1 매핑) |
+    | `preferred_username` | `username` | 사용자명 |
+    | `realm_access.roles` | `role` | employee / manager / hr_system |
+    | `department` | `team` | Keycloak User Attribute → Token Claim Mapper |
+
+  contact:
+    name: IBM API Connect Sample
+    url: https://www.ibm.com/products/api-connect
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:8000
+    description: 로컬 개발 서버
+  - url: https://salary-api.apps.your-cluster.example.com
+    description: OpenShift 배포 (Route)
+  - url: https://salary-api.your-cluster.example.com
+    description: Kubernetes 배포 (Ingress)
+
+tags:
+  - name: Health
+    description: 서버 상태 확인
+  - name: Authentication
+    description: 토큰 검증, Keycloak 연결 상태 확인, JWKS 캐시 관리
+  - name: Salary
+    description: 연봉 정보 조회/수정/삭제 (역할 기반 접근 제어)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Security
+# ─────────────────────────────────────────────────────────────────────────────
+security:
+  - BearerAuth: []
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Paths
+# ─────────────────────────────────────────────────────────────────────────────
+paths:
+
+  # ── Health ──────────────────────────────────────────────────────────────────
+  /:
+    get:
+      tags: [Health]
+      summary: API 정보
+      operationId: getApiInfo
+      security: []
+      description: API 버전, 인증 모드, Keycloak issuer 정보를 반환합니다.
+      responses:
+        "200":
+          description: API 기본 정보
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiInfo"
+              example:
+                name: Salary Management API
+                version: 2.0.0
+                auth_mode: "Keycloak External IdP (JWKS)"
+                keycloak_issuer: "http://localhost:8080/realms/corp"
+                docs: /docs
+                redoc: /redoc
+                openapi: /openapi.json
+
+  /health:
+    get:
+      tags: [Health]
+      summary: 서버 상태 확인
+      operationId: getHealth
+      security: []
+      description: 서버 및 Keycloak Issuer 정보를 포함한 상태를 반환합니다.
+      responses:
+        "200":
+          description: 서버 정상 동작
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+              example:
+                status: ok
+                timestamp: "2024-11-15T09:00:00.000Z"
+                keycloak_issuer: "http://localhost:8080/realms/corp"
+
+  # ── Authentication ───────────────────────────────────────────────────────────
+  /auth/me:
+    get:
+      tags: [Authentication]
+      summary: 현재 토큰의 사용자 정보 반환
+      operationId: getMe
+      description: |
+        Keycloak Access Token을 검증하고 해당 토큰에서 추출한 사용자 정보를 반환합니다.
+        토큰 정상 여부, 역할, 팀 정보를 빠르게 확인할 때 사용합니다.
+
+        **Keycloak 클레임 → 응답 필드 변환:**
+        - `sub` → `id`
+        - `preferred_username` → `username`
+        - `email` → `email`
+        - `name` → `full_name`
+        - `realm_access.roles` or `resource_access.salary-api.roles` → `role`
+        - `department` (User Attribute) → `team`
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: 현재 인증된 사용자 정보
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserInfo"
+              examples:
+                employee:
+                  summary: alice (employee, engineering)
+                  value:
+                    id: sub-alice-0001
+                    username: alice
+                    email: alice@corp.com
+                    full_name: Alice Kim
+                    role: employee
+                    team: engineering
+                manager:
+                  summary: dave (manager, engineering)
+                  value:
+                    id: sub-dave-0004
+                    username: dave
+                    email: dave@corp.com
+                    full_name: Dave Choi
+                    role: manager
+                    team: engineering
+                hrSystem:
+                  summary: hr_system
+                  value:
+                    id: sub-hr-0006
+                    username: hr_system
+                    email: hr@corp.com
+                    full_name: HR System
+                    role: hr_system
+                    team: null
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/KeycloakUnavailable"
+
+  /auth/config:
+    get:
+      tags: [Authentication]
+      summary: Keycloak 연동 설정 확인
+      operationId: getAuthConfig
+      security: []
+      description: |
+        현재 서버에 적용된 Keycloak 연동 설정(환경변수 기반)을 반환합니다.
+        배포 후 설정이 올바르게 적용되었는지 확인할 때 사용합니다.
+      responses:
+        "200":
+          description: 현재 Keycloak 연동 설정
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthConfig"
+              example:
+                keycloak_issuer: "http://localhost:8080/realms/corp"
+                keycloak_jwks_url: "http://localhost:8080/realms/corp/protocol/openid-connect/certs"
+                keycloak_audience: salary-api
+                token_header_name: Authorization
+
+  /auth/jwks-status:
+    get:
+      tags: [Authentication]
+      summary: Keycloak JWKS 연결 상태 확인
+      operationId: getJwksStatus
+      security: []
+      description: |
+        Keycloak JWKS 엔드포인트에 실제 연결해 공개키 목록을 가져올 수 있는지 확인합니다.
+        배포 직후 Keycloak 연결 검증이나 트러블슈팅 시 사용합니다.
+      responses:
+        "200":
+          description: JWKS 연결 상태 (성공 또는 실패 모두 200으로 반환)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JwksStatus"
+              examples:
+                connected:
+                  summary: 연결 성공
+                  value:
+                    status: ok
+                    jwks_url: "http://localhost:8080/realms/corp/protocol/openid-connect/certs"
+                    key_count: 2
+                    key_ids:
+                      - abc123keyid
+                      - def456keyid
+                disconnected:
+                  summary: Keycloak 미접속 / URL 오류
+                  value:
+                    status: error
+                    jwks_url: "http://localhost:8080/realms/corp/protocol/openid-connect/certs"
+                    detail: "Unable to reach Keycloak JWKS endpoint. Check KEYCLOAK_URL and KEYCLOAK_REALM."
+
+  /auth/jwks-refresh:
+    post:
+      tags: [Authentication]
+      summary: JWKS 캐시 강제 갱신
+      operationId: refreshJwks
+      security: []
+      description: |
+        Keycloak 키 롤오버(Key Rotation) 발생 시, 메모리에 캐시된 JWKS를 강제로 갱신합니다.
+
+        정상적인 상황에서는 kid 불일치 시 자동으로 캐시를 갱신하므로 수동 호출이 불필요합니다.
+        즉각적인 갱신이 필요한 경우에만 사용하세요.
+      responses:
+        "200":
+          description: JWKS 캐시 갱신 결과
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JwksRefreshResponse"
+              examples:
+                refreshed:
+                  summary: 갱신 성공
+                  value:
+                    status: refreshed
+                    key_count: 2
+                    key_ids:
+                      - ghi789newkeyid
+                      - def456keyid
+                error:
+                  summary: Keycloak 접근 불가
+                  value:
+                    status: error
+                    detail: "Unable to reach Keycloak JWKS endpoint."
+
+  # ── Salary ───────────────────────────────────────────────────────────────────
+  /salaries/me:
+    get:
+      tags: [Salary]
+      summary: 본인 연봉 조회
+      operationId: getMysalary
+      description: |
+        현재 인증된 사용자의 연봉 레코드를 조회합니다.
+        역할에 관계없이 모든 인증된 사용자가 호출 가능합니다.
+
+        연봉 레코드의 `employee_id` 가 Keycloak 토큰의 `sub` 클레임과 매핑됩니다.
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: 본인 연봉 레코드
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SalaryRecord"
+              examples:
+                employee:
+                  summary: alice (사원, engineering)
+                  value:
+                    id: s001
+                    employee_id: sub-alice-0001
+                    employee_name: Alice Kim
+                    team: engineering
+                    base_salary: 72000000
+                    bonus: 5000000
+                    currency: KRW
+                    effective_date: "2024-01-01"
+                    status: active
+                manager:
+                  summary: dave (팀장, engineering)
+                  value:
+                    id: s004
+                    employee_id: sub-dave-0004
+                    employee_name: Dave Choi
+                    team: engineering
+                    base_salary: 95000000
+                    bonus: 10000000
+                    currency: KRW
+                    effective_date: "2024-01-01"
+                    status: active
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: 연봉 레코드 없음 (hr_system 등 직원이 아닌 계정)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+              example:
+                detail: No salary record found for this user
+        "503":
+          $ref: "#/components/responses/KeycloakUnavailable"
+
+  /salaries:
+    get:
+      tags: [Salary]
+      summary: 연봉 목록 조회 (역할별 범위 차이)
+      operationId: listSalaries
+      description: |
+        역할에 따라 다른 범위의 연봉 레코드를 반환합니다.
+
+        | 역할 | 반환 범위 |
+        |------|---------|
+        | `employee` | 본인 레코드 1건 |
+        | `manager` | 본인 팀 전체 레코드 |
+        | `hr_system` | 전체 레코드 |
+
+        **같은 엔드포인트, 다른 결과** — 역할 기반 데이터 스코핑의 핵심 예시입니다.
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: |
+            연봉 목록 (역할에 따라 반환 건수 다름)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SalaryListResponse"
+              examples:
+                asEmployee:
+                  summary: alice(employee) 호출 — 본인 1건
+                  value:
+                    total: 1
+                    data:
+                      - id: s001
+                        employee_id: sub-alice-0001
+                        employee_name: Alice Kim
+                        team: engineering
+                        base_salary: 72000000
+                        bonus: 5000000
+                        currency: KRW
+                        effective_date: "2024-01-01"
+                        status: active
+                asManager:
+                  summary: dave(manager, engineering) 호출 — 팀 3건
+                  value:
+                    total: 3
+                    data:
+                      - id: s001
+                        employee_id: sub-alice-0001
+                        employee_name: Alice Kim
+                        team: engineering
+                        base_salary: 72000000
+                        bonus: 5000000
+                        currency: KRW
+                        effective_date: "2024-01-01"
+                        status: active
+                      - id: s002
+                        employee_id: sub-bob-0002
+                        employee_name: Bob Lee
+                        team: engineering
+                        base_salary: 68000000
+                        bonus: 4000000
+                        currency: KRW
+                        effective_date: "2024-01-01"
+                        status: active
+                      - id: s004
+                        employee_id: sub-dave-0004
+                        employee_name: Dave Choi
+                        team: engineering
+                        base_salary: 95000000
+                        bonus: 10000000
+                        currency: KRW
+                        effective_date: "2024-01-01"
+                        status: active
+                asHrSystem:
+                  summary: hr_system 호출 — 전체 5건
+                  value:
+                    total: 5
+                    data:
+                      - id: s001
+                        employee_id: sub-alice-0001
+                        employee_name: Alice Kim
+                        team: engineering
+                        base_salary: 72000000
+                        bonus: 5000000
+                        currency: KRW
+                        effective_date: "2024-01-01"
+                        status: active
+                      - id: s002
+                        employee_id: sub-bob-0002
+                        employee_name: Bob Lee
+                        team: engineering
+                        base_salary: 68000000
+                        bonus: 4000000
+                        currency: KRW
+                        effective_date: "2024-01-01"
+                        status: active
+                      - id: s003
+                        employee_id: sub-carol-0003
+                        employee_name: Carol Park
+                        team: marketing
+                        base_salary: 65000000
+                        bonus: 6000000
+                        currency: KRW
+                        effective_date: "2024-01-01"
+                        status: active
+                      - id: s004
+                        employee_id: sub-dave-0004
+                        employee_name: Dave Choi
+                        team: engineering
+                        base_salary: 95000000
+                        bonus: 10000000
+                        currency: KRW
+                        effective_date: "2024-01-01"
+                        status: active
+                      - id: s005
+                        employee_id: sub-eve-0005
+                        employee_name: Eve Jung
+                        team: marketing
+                        base_salary: 90000000
+                        bonus: 8000000
+                        currency: KRW
+                        effective_date: "2024-01-01"
+                        status: active
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/KeycloakUnavailable"
+
+  /salaries/{salaryId}:
+    parameters:
+      - $ref: "#/components/parameters/PathSalaryId"
+
+    get:
+      tags: [Salary]
+      summary: 특정 연봉 레코드 조회
+      operationId: getSalary
+      description: |
+        ID로 특정 연봉 레코드를 조회합니다.
+
+        **접근 규칙:**
+        - `employee`: 본인 레코드만 조회 가능
+        - `manager`: 자신과 같은 팀 레코드만 조회 가능
+        - `hr_system`: 모든 레코드 조회 가능
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: 연봉 레코드 상세
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SalaryRecord"
+              examples:
+                aliceByAlice:
+                  summary: alice가 본인 레코드 조회 (s001)
+                  value:
+                    id: s001
+                    employee_id: sub-alice-0001
+                    employee_name: Alice Kim
+                    team: engineering
+                    base_salary: 72000000
+                    bonus: 5000000
+                    currency: KRW
+                    effective_date: "2024-01-01"
+                    status: active
+                aliceByManager:
+                  summary: dave(팀장)가 alice 레코드 조회
+                  value:
+                    id: s001
+                    employee_id: sub-alice-0001
+                    employee_name: Alice Kim
+                    team: engineering
+                    base_salary: 72000000
+                    bonus: 5000000
+                    currency: KRW
+                    effective_date: "2024-01-01"
+                    status: active
+                carolByHr:
+                  summary: hr_system이 carol(marketing) 레코드 조회
+                  value:
+                    id: s003
+                    employee_id: sub-carol-0003
+                    employee_name: Carol Park
+                    team: marketing
+                    base_salary: 65000000
+                    bonus: 3500000
+                    currency: KRW
+                    effective_date: "2024-01-01"
+                    status: active
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/SalaryNotFound"
+        "503":
+          $ref: "#/components/responses/KeycloakUnavailable"
+
+    patch:
+      tags: [Salary]
+      summary: 연봉 수정 (부분 업데이트)
+      operationId: updateSalary
+      description: |
+        연봉 레코드의 `base_salary`, `bonus`, `effective_date` 를 부분 수정합니다.
+
+        **수정 권한 규칙:**
+        - `employee`: 본인 레코드만 수정 가능
+        - `manager`: 자신과 같은 팀 레코드 수정 가능
+        - `hr_system`: 모든 레코드 수정 가능
+
+        최소 하나 이상의 필드를 제공해야 합니다. 빈 요청 바디는 `400` 에러를 반환합니다.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SalaryUpdateRequest"
+            examples:
+              raiseSalary:
+                summary: 연봉 인상 (팀장이 팀원에게)
+                value:
+                  base_salary: 78000000
+                  bonus: 7000000
+                  effective_date: "2025-01-01"
+              bonusOnly:
+                summary: 보너스만 변경
+                value:
+                  bonus: 6000000
+              effectiveDateOnly:
+                summary: 적용일만 변경
+                value:
+                  effective_date: "2024-07-01"
+      responses:
+        "200":
+          description: 수정 성공
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SalaryUpdateResponse"
+              examples:
+                byManager:
+                  summary: 팀장이 팀원 연봉 인상
+                  value:
+                    message: Salary record updated successfully
+                    updated_by: dave
+                    updated_by_role: manager
+                    record:
+                      id: s001
+                      employee_id: sub-alice-0001
+                      employee_name: Alice Kim
+                      team: engineering
+                      base_salary: 78000000
+                      bonus: 7000000
+                      currency: KRW
+                      effective_date: "2025-01-01"
+                      status: active
+                bySelf:
+                  summary: 사원이 본인 연봉 수정
+                  value:
+                    message: Salary record updated successfully
+                    updated_by: alice
+                    updated_by_role: employee
+                    record:
+                      id: s001
+                      employee_id: sub-alice-0001
+                      employee_name: Alice Kim
+                      team: engineering
+                      base_salary: 74000000
+                      bonus: 5000000
+                      currency: KRW
+                      effective_date: "2024-07-01"
+                      status: active
+        "400":
+          description: 수정할 필드가 없음
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+              example:
+                detail: No fields provided to update
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/SalaryNotFound"
+        "503":
+          $ref: "#/components/responses/KeycloakUnavailable"
+
+    delete:
+      tags: [Salary]
+      summary: 연봉 레코드 삭제 (hr_system 전용)
+      operationId: deleteSalary
+      description: |
+        연봉 레코드를 영구 삭제합니다.
+
+        **`hr_system` 역할만 호출 가능합니다.**
+
+        일반적인 사용 사례: 퇴사 처리 워크플로우에서 HR 시스템이 자동으로 호출합니다.
+        `employee` 또는 `manager` 역할이 호출 시 `403 Forbidden`을 반환합니다.
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: 삭제 성공
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SalaryDeleteResponse"
+              example:
+                message: Salary record deleted successfully (employee offboarded)
+                deleted_by: hr_system
+                deleted_record:
+                  id: s001
+                  employee_id: sub-alice-0001
+                  employee_name: Alice Kim
+                  team: engineering
+                  base_salary: 78000000
+                  bonus: 7000000
+                  currency: KRW
+                  effective_date: "2025-01-01"
+                  status: active
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: |
+            권한 없음. 두 가지 경우:
+            - employee / manager 역할이 삭제 시도 → "Only the HR system role may delete salary records."
+            - 역할이 없는 토큰 → "No valid role found in token."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+              examples:
+                notHrSystem:
+                  summary: employee/manager 역할이 삭제 시도
+                  value:
+                    detail: Only the HR system role may delete salary records.
+                noRole:
+                  summary: 유효한 역할 없음
+                  value:
+                    detail: "No valid role found in token. Expected one of: employee, manager, hr_system. Found roles: ['default-roles-corp']"
+        "404":
+          $ref: "#/components/responses/SalaryNotFound"
+        "503":
+          $ref: "#/components/responses/KeycloakUnavailable"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Components
+# ─────────────────────────────────────────────────────────────────────────────
+components:
+
+  # ── Security Schemes ─────────────────────────────────────────────────────────
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        Keycloak에서 발급한 JWT Bearer 토큰입니다.
+
+        **토큰 발급 방법 (Keycloak Password Grant):**
+        ```
+        POST http://localhost:8080/realms/corp/protocol/openid-connect/token
+        Content-Type: application/x-www-form-urlencoded
+
+        grant_type=password
+        &client_id=salary-api
+        &client_secret=<client_secret>
+        &username=alice
+        &password=alice123
+        ```
+
+        응답의 `access_token` 값을 `Authorization: Bearer <token>` 헤더로 전달합니다.
+
+        **API Connect 연동 시:** API Connect가 outbound 토큰을 헤더로 전달합니다.
+        기본 헤더: `Authorization`
+        커스텀 헤더: `TOKEN_HEADER_NAME` 환경변수로 변경 가능 (예: `X-Forwarded-Access-Token`)
+
+  # ── Schemas ──────────────────────────────────────────────────────────────────
+  schemas:
+
+    SalaryRecord:
+      type: object
+      description: 직원 연봉 레코드
+      required:
+        - id
+        - employee_id
+        - employee_name
+        - team
+        - base_salary
+        - bonus
+        - currency
+        - effective_date
+        - status
+      properties:
+        id:
+          type: string
+          description: 연봉 레코드 고유 ID
+          example: s001
+          readOnly: true
+        employee_id:
+          type: string
+          description: Keycloak sub 클레임 (사용자 고유 ID)
+          example: sub-alice-0001
+          readOnly: true
+        employee_name:
+          type: string
+          description: 직원 이름
+          example: Alice Kim
+        team:
+          type: string
+          description: 소속 팀 (Keycloak department 클레임)
+          enum:
+            - engineering
+            - marketing
+          example: engineering
+        base_salary:
+          type: integer
+          description: 기본급 (KRW, 원 단위)
+          minimum: 0
+          example: 72000000
+        bonus:
+          type: integer
+          description: 보너스 (KRW, 원 단위)
+          minimum: 0
+          example: 5000000
+        currency:
+          type: string
+          description: 통화 코드 (ISO 4217)
+          enum:
+            - KRW
+            - USD
+            - EUR
+          example: KRW
+        effective_date:
+          type: string
+          format: date
+          description: 적용 기준일 (YYYY-MM-DD)
+          example: "2024-01-01"
+        status:
+          type: string
+          description: 레코드 상태
+          enum:
+            - active
+            - inactive
+          example: active
+
+    SalaryUpdateRequest:
+      type: object
+      description: |
+        연봉 부분 수정 요청. 수정할 필드만 포함합니다.
+        최소 하나 이상의 필드를 포함해야 합니다.
+      minProperties: 1
+      properties:
+        base_salary:
+          type: integer
+          description: 기본급 (KRW)
+          minimum: 0
+          example: 78000000
+        bonus:
+          type: integer
+          description: 보너스 (KRW)
+          minimum: 0
+          example: 7000000
+        effective_date:
+          type: string
+          format: date
+          description: 적용 기준일 (YYYY-MM-DD)
+          example: "2025-01-01"
+
+    SalaryListResponse:
+      type: object
+      required:
+        - total
+        - data
+      properties:
+        total:
+          type: integer
+          description: 반환된 레코드 수 (역할에 따라 다름)
+          example: 3
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/SalaryRecord"
+
+    SalaryUpdateResponse:
+      type: object
+      required:
+        - message
+        - updated_by
+        - updated_by_role
+        - record
+      properties:
+        message:
+          type: string
+          example: Salary record updated successfully
+        updated_by:
+          type: string
+          description: 수정을 수행한 사용자명
+          example: dave
+        updated_by_role:
+          type: string
+          description: 수정을 수행한 사용자의 역할
+          enum:
+            - employee
+            - manager
+            - hr_system
+          example: manager
+        record:
+          $ref: "#/components/schemas/SalaryRecord"
+
+    SalaryDeleteResponse:
+      type: object
+      required:
+        - message
+        - deleted_by
+        - deleted_record
+      properties:
+        message:
+          type: string
+          example: Salary record deleted successfully (employee offboarded)
+        deleted_by:
+          type: string
+          description: 삭제를 수행한 사용자명 (항상 hr_system)
+          example: hr_system
+        deleted_record:
+          $ref: "#/components/schemas/SalaryRecord"
+
+    UserInfo:
+      type: object
+      description: Keycloak 토큰에서 추출한 사용자 정보
+      required:
+        - id
+        - username
+        - role
+      properties:
+        id:
+          type: string
+          description: Keycloak sub 클레임
+          example: sub-alice-0001
+        username:
+          type: string
+          description: Keycloak preferred_username 클레임
+          example: alice
+        email:
+          type: string
+          format: email
+          nullable: true
+          description: Keycloak email 클레임
+          example: alice@corp.com
+        full_name:
+          type: string
+          nullable: true
+          description: Keycloak name 클레임
+          example: Alice Kim
+        role:
+          type: string
+          description: |
+            이 API에서 결정된 역할 (우선순위: hr_system > manager > employee)
+          enum:
+            - employee
+            - manager
+            - hr_system
+          example: employee
+        team:
+          type: string
+          nullable: true
+          description: Keycloak department User Attribute
+          example: engineering
+
+    AuthConfig:
+      type: object
+      description: Keycloak 연동 설정 (환경변수 반영값)
+      required:
+        - keycloak_issuer
+        - keycloak_jwks_url
+        - keycloak_audience
+        - token_header_name
+      properties:
+        keycloak_issuer:
+          type: string
+          format: uri
+          description: Keycloak Realm Issuer URL
+          example: "http://localhost:8080/realms/corp"
+        keycloak_jwks_url:
+          type: string
+          format: uri
+          description: Keycloak JWKS 엔드포인트 URL
+          example: "http://localhost:8080/realms/corp/protocol/openid-connect/certs"
+        keycloak_audience:
+          type: string
+          description: JWT aud 클레임 검증값 (= Keycloak Client ID)
+          example: salary-api
+        token_header_name:
+          type: string
+          description: 토큰을 전달하는 HTTP 헤더 이름
+          example: Authorization
+
+    JwksStatus:
+      type: object
+      required:
+        - status
+        - jwks_url
+      properties:
+        status:
+          type: string
+          description: JWKS 연결 상태
+          enum:
+            - ok
+            - error
+          example: ok
+        jwks_url:
+          type: string
+          format: uri
+          example: "http://localhost:8080/realms/corp/protocol/openid-connect/certs"
+        key_count:
+          type: integer
+          description: 조회된 공개키 수
+          example: 2
+        key_ids:
+          type: array
+          description: 조회된 공개키의 kid 목록
+          items:
+            type: string
+          example:
+            - abc123keyid
+            - def456keyid
+        detail:
+          type: string
+          description: 에러 발생 시 상세 메시지
+          example: "Unable to reach Keycloak JWKS endpoint."
+
+    JwksRefreshResponse:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum:
+            - refreshed
+            - error
+          example: refreshed
+        key_count:
+          type: integer
+          example: 2
+        key_ids:
+          type: array
+          items:
+            type: string
+          example:
+            - ghi789newkeyid
+            - def456keyid
+        detail:
+          type: string
+          description: 에러 시 상세 메시지
+
+    HealthResponse:
+      type: object
+      required:
+        - status
+        - timestamp
+      properties:
+        status:
+          type: string
+          enum: [ok]
+          example: ok
+        timestamp:
+          type: string
+          format: date-time
+          example: "2024-11-15T09:00:00.000Z"
+        keycloak_issuer:
+          type: string
+          format: uri
+          example: "http://localhost:8080/realms/corp"
+
+    ApiInfo:
+      type: object
+      properties:
+        name:
+          type: string
+          example: Salary Management API
+        version:
+          type: string
+          example: "2.0.0"
+        auth_mode:
+          type: string
+          example: "Keycloak External IdP (JWKS)"
+        keycloak_issuer:
+          type: string
+          format: uri
+          example: "http://localhost:8080/realms/corp"
+        docs:
+          type: string
+          example: /docs
+        redoc:
+          type: string
+          example: /redoc
+        openapi:
+          type: string
+          example: /openapi.json
+
+    ErrorDetail:
+      type: object
+      description: FastAPI 표준 에러 응답
+      required:
+        - detail
+      properties:
+        detail:
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                $ref: "#/components/schemas/ValidationError"
+          example: Salary record not found
+
+    ValidationError:
+      type: object
+      description: Pydantic 유효성 검사 에러 (422 응답에 포함)
+      required:
+        - loc
+        - msg
+        - type
+      properties:
+        loc:
+          type: array
+          items:
+            type: string
+          description: 오류 위치 (필드 경로)
+          example: ["body", "base_salary"]
+        msg:
+          type: string
+          description: 오류 메시지
+          example: "Input should be a valid integer"
+        type:
+          type: string
+          description: 오류 타입
+          example: int_type
+
+  # ── Parameters ───────────────────────────────────────────────────────────────
+  parameters:
+
+    PathSalaryId:
+      name: salaryId
+      in: path
+      required: true
+      description: 연봉 레코드 고유 ID
+      schema:
+        type: string
+      examples:
+        alice:
+          value: s001
+          summary: Alice Kim의 레코드
+        bob:
+          value: s002
+          summary: Bob Lee의 레코드
+        carol:
+          value: s003
+          summary: Carol Park의 레코드
+
+  # ── Responses ─────────────────────────────────────────────────────────────────
+  responses:
+
+    Unauthorized:
+      description: |
+        인증 실패. 다음 중 하나:
+        - 토큰 없음 (`Missing token`)
+        - 토큰 만료 (`Signature has expired`)
+        - 잘못된 형식 (`Not enough segments`)
+        - issuer 불일치 (`Invalid issuer`)
+        - audience 불일치 (`Audience validation failed`)
+        - 알 수 없는 kid (`No matching public key found`)
+      headers:
+        WWW-Authenticate:
+          schema:
+            type: string
+            example: Bearer
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorDetail"
+          examples:
+            noToken:
+              summary: 토큰 없음
+              value:
+                detail: "Missing token. Expected header: 'Authorization: Bearer <token>'"
+            expired:
+              summary: 토큰 만료
+              value:
+                detail: "Token validation failed: Signature has expired."
+            badFormat:
+              summary: 잘못된 형식
+              value:
+                detail: "Token validation failed: Not enough segments"
+            invalidIssuer:
+              summary: Issuer 불일치
+              value:
+                detail: "Token validation failed: Invalid issuer"
+            unknownKid:
+              summary: 알 수 없는 공개키 ID
+              value:
+                detail: "No matching public key found for kid='xyz'. Token may have been issued by a different Keycloak realm."
+
+    Forbidden:
+      description: |
+        권한 없음. 다음 중 하나:
+        - 역할이 접근 권한 없음 (`You do not have permission to view/update this salary record.`)
+        - hr_system 전용 엔드포인트에 다른 역할이 접근 (`Only the HR system role may delete salary records.`)
+        - 유효한 역할 없음 (`No valid role found in token.`)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorDetail"
+          examples:
+            noPermissionView:
+              summary: 조회 권한 없음
+              value:
+                detail: You do not have permission to view this salary record.
+            noPermissionUpdate:
+              summary: 수정 권한 없음
+              value:
+                detail: You do not have permission to update this salary record.
+            hrOnly:
+              summary: hr_system 전용
+              value:
+                detail: Only the HR system role may delete salary records.
+            noRole:
+              summary: 유효한 역할 없음
+              value:
+                detail: "No valid role found in token. Expected one of: employee, manager, hr_system. Found roles: ['default-roles-corp']"
+
+    SalaryNotFound:
+      description: 연봉 레코드를 찾을 수 없음
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorDetail"
+          example:
+            detail: Salary record not found
+
+    KeycloakUnavailable:
+      description: Keycloak JWKS 엔드포인트 접근 불가
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorDetail"
+          example:
+            detail: "Unable to reach Keycloak JWKS endpoint. Check KEYCLOAK_URL and KEYCLOAK_REALM. (ConnectError)"

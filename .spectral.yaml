@@ -1,0 +1,53 @@
+# .spectral.yaml
+# Spectral OpenAPI Lint 룰셋 — SampleAPIs 프로젝트
+#
+# 기본 oas 룰셋 + 커스텀 규칙
+# 참고: https://docs.stoplight.io/docs/spectral/674b27b261c3c-overview
+
+extends:
+  - spectral:oas        # OpenAPI 2/3 기본 규칙
+
+rules:
+
+  # ── 비활성화 (샘플 API 특성상 완화) ────────────────────────────────────────
+
+  # 'info-contact' 완화: 샘플용이므로 연락처 없어도 허용
+  info-contact: off
+
+  # 'info-license' 완화: 라이선스 정의 필수 해제
+  info-license: off
+
+  # ── 커스텀 규칙 ────────────────────────────────────────────────────────────
+
+  # 모든 응답에 200/201 이상의 정상 응답 정의 필요
+  operation-success-response:
+    description: "모든 오퍼레이션은 2xx 성공 응답을 정의해야 합니다."
+    severity: warn
+    given: "$.paths[*][get,post,put,patch,delete]"
+    then:
+      field: responses
+      function: schema
+      functionOptions:
+        schema:
+          type: object
+          patternProperties:
+            "^2[0-9]{2}$": {}
+          minProperties: 1
+
+  # 모든 오퍼레이션에 summary 필수
+  operation-summary-required:
+    description: "모든 오퍼레이션은 summary를 가져야 합니다."
+    severity: warn
+    given: "$.paths[*][get,post,put,patch,delete]"
+    then:
+      field: summary
+      function: truthy
+
+  # 모든 오퍼레이션에 operationId 필수
+  operation-id-required:
+    description: "모든 오퍼레이션은 operationId를 가져야 합니다."
+    severity: error
+    given: "$.paths[*][get,post,put,patch,delete]"
+    then:
+      field: operationId
+      function: truthy

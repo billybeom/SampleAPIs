@@ -1,0 +1,31 @@
+# Kubernetes Ingress — NGINX Ingress Controller 기준
+# annotations 값을 클러스터 환경에 맞게 조정하세요.
+# TLS 인증서는 cert-manager 또는 수동 secret으로 설정합니다.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: tours-graphql-api
+  namespace: sample-apis
+  labels:
+    app: tours-graphql-api
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    # TLS 자동 발급 (cert-manager 사용 시)
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  # TLS 사용 시 주석 해제
+  # tls:
+  #   - hosts:
+  #       - tours-graphql-api.example.com
+  #     secretName: tours-graphql-api-tls
+  rules:
+    - host: tours-graphql-api.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: tours-graphql-api
+                port:
+                  number: 4000

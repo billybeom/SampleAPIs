@@ -1,0 +1,71 @@
+# ── API 3: Tours Management API — Kubernetes Deployment ──────────────────────
+# namespace : sample-apis
+# image     : 실제 레지스트리 경로로 교체하세요.
+#   예) ghcr.io/your-org/tours-api:latest
+#       your-registry.example.com/sample-apis/tours-api:latest
+#
+# OpenShift와의 차이:
+#   - ImageStream 없음 (레지스트리 직접 참조)
+#   - imagePullSecrets 추가 (프라이빗 레지스트리 사용 시)
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tours-api
+  namespace: sample-apis
+  labels:
+    app: tours-api
+    app.kubernetes.io/part-of: sample-apis
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: tours-api
+  template:
+    metadata:
+      labels:
+        app: tours-api
+    spec:
+      # 프라이빗 레지스트리 사용 시 주석 해제하고 secret 이름을 입력하세요.
+      # imagePullSecrets:
+      #   - name: registry-credentials
+      containers:
+        - name: tours-api
+          image: your-registry.example.com/sample-apis/tours-api:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3002
+              protocol: TCP
+          env:
+            - name: PORT
+              value: "3002"
+            - name: NODE_ENV
+              value: "production"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3002
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3002
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities:
+              drop:
+                - ALL
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault

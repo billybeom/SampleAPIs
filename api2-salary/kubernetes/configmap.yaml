@@ -1,0 +1,30 @@
+# ── Salary API — Keycloak 연동 설정 ConfigMap ────────────────────────────────
+# 민감하지 않은 Keycloak 설정값을 ConfigMap으로 관리합니다.
+# 아래 값을 실제 Keycloak 환경에 맞게 변경하세요.
+#
+# 적용:
+#   kubectl apply -f kubernetes/configmap.yaml -n sample-apis
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: salary-api-config
+  namespace: sample-apis
+  labels:
+    app: salary-api
+data:
+  # Keycloak 서버 URL
+  # K8s 내부(같은 클러스터): http://keycloak.keycloak-ns.svc.cluster.local:8080
+  # 외부 Keycloak:           https://keycloak.corp.com
+  keycloak-url: "http://keycloak.example.com"
+
+  # Keycloak Realm 이름
+  keycloak-realm: "corp"
+
+  # Keycloak Client ID (토큰의 aud 클레임 검증에 사용)
+  keycloak-audience: "salary-api"
+
+  # API Connect(또는 클라이언트)가 Salary API로 토큰을 전달하는 헤더 이름
+  # Authorization           : Bearer 토큰을 Authorization 헤더로 그대로 전달
+  # X-Forwarded-Access-Token: API Connect Set-Variable 정책으로 별도 헤더에 복사
+  token-header-name: "Authorization"

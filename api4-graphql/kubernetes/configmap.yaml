@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tours-graphql-api-config
+  namespace: sample-apis
+  labels:
+    app: tours-graphql-api
+data:
+  PORT: "4000"
+  NODE_ENV: "production"

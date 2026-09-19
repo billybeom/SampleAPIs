@@ -1,0 +1,29 @@
+{
+  "name": "tours-graphql-api",
+  "version": "1.0.0",
+  "description": "Tours Management GraphQL API — IBM API Connect Sample (Apollo Server v4 + Express)",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
+    "test": "node --test test/"
+  },
+  "keywords": ["GraphQL", "Apollo", "IBM", "API-Connect", "tours", "sample"],
+  "author": "IBM API Connect Sample",
+  "license": "MIT",
+  "dependencies": {
+    "@apollo/server": "^4.11.0",
+    "body-parser": "^1.20.3",
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "graphql": "^16.9.0",
+    "morgan": "^1.10.0",
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.7"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

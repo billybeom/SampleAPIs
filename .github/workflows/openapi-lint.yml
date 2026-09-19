@@ -1,0 +1,90 @@
+# =============================================================================
+# .github/workflows/openapi-lint.yml
+#
+# OpenAPI 명세서 Spectral Lint — 두 API 통합 검사
+#
+# 트리거:
+#   - openapi.yaml 변경 시
+#   - PR 생성/업데이트 시
+# =============================================================================
+
+name: OpenAPI Spectral Lint
+
+on:
+  push:
+    paths:
+      - "**/openapi.yaml"
+      - "apic/*.yaml"
+      - ".github/workflows/openapi-lint.yml"
+      - ".spectral.yaml"
+  pull_request:
+    paths:
+      - "**/openapi.yaml"
+      - "apic/*.yaml"
+
+jobs:
+  spectral:
+    name: Spectral Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+
+      - name: Install Spectral
+        run: |
+          npm install -g @stoplight/spectral-cli
+          spectral --version
+
+      - name: Lint API 1 — Library (OpenAPI 3.0)
+        run: |
+          echo "=== API 1: Library Management API ==="
+          spectral lint api1-library/openapi.yaml \
+            --ruleset .spectral.yaml \
+            --fail-severity error
+        continue-on-error: false
+
+      - name: Lint API 2 — Salary (OpenAPI 3.0)
+        run: |
+          echo "=== API 2: Salary Management API ==="
+          spectral lint api2-salary/openapi.yaml \
+            --ruleset .spectral.yaml \
+            --fail-severity error
+        continue-on-error: false
+
+      - name: Lint API 3 — Tours (OpenAPI 3.0)
+        run: |
+          echo "=== API 3: Tours Management API ==="
+          spectral lint api3-tours/openapi.yaml \
+            --ruleset .spectral.yaml \
+            --fail-severity error
+        continue-on-error: false
+
+      - name: Lint APIC Assembly — Library (Swagger 2.0)
+        run: |
+          echo "=== APIC: Library Assembly ==="
+          spectral lint apic/api1-library-apic.yaml \
+            --ruleset .spectral.yaml \
+            --fail-severity warn
+        continue-on-error: true   # APIC Assembly는 경고 허용
+
+      - name: Lint APIC Assembly — Salary (Swagger 2.0)
+        run: |
+          echo "=== APIC: Salary Assembly ==="
+          spectral lint apic/api2-salary-apic.yaml \
+            --ruleset .spectral.yaml \
+            --fail-severity warn
+        continue-on-error: true
+
+      - name: Upload Spectral results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spectral-results
+          path: |
+            api1-library/openapi.yaml
+            api2-salary/openapi.yaml

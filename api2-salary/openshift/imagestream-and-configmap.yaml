@@ -1,0 +1,34 @@
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: salary-api
+  namespace: sample-apis
+  labels:
+    app: salary-api
+spec:
+  lookupPolicy:
+    local: true
+---
+# ConfigMap — Keycloak 연동 설정 (민감하지 않은 설정값)
+# 아래 값을 실제 Keycloak 환경에 맞게 변경하세요.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: salary-api-config
+  namespace: sample-apis
+data:
+  # Keycloak 서버 URL
+  # OCP 내부: http://keycloak.keycloak-ns.svc.cluster.local:8080
+  # 외부 URL: https://keycloak.corp.com
+  keycloak-url: "http://keycloak.example.com"
+
+  # Keycloak Realm 이름
+  keycloak-realm: "corp"
+
+  # Keycloak Client ID (토큰의 aud 클레임 검증에 사용)
+  keycloak-audience: "salary-api"
+
+  # API Connect가 Salary API로 전달하는 토큰 헤더 이름
+  # Authorization          : API Connect가 원본 Authorization 헤더 그대로 전달
+  # X-Forwarded-Access-Token: API Connect Set-Variable 정책으로 별도 헤더에 복사
+  token-header-name: "Authorization"

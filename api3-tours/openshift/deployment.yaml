@@ -1,0 +1,63 @@
+# ── API 3: Tours Management API — OpenShift Deployment ───────────────────────
+# namespace: sample-apis (아래 모든 리소스 동일)
+# image   : 아래 IMAGE 값을 실제 레지스트리 경로로 교체하세요.
+#   예) image-registry.openshift-image-registry.svc:5000/sample-apis/tours-api:latest
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tours-api
+  namespace: sample-apis
+  labels:
+    app: tours-api
+    app.kubernetes.io/part-of: sample-apis
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: tours-api
+  template:
+    metadata:
+      labels:
+        app: tours-api
+    spec:
+      containers:
+        - name: tours-api
+          image: image-registry.openshift-image-registry.svc:5000/sample-apis/tours-api:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3002
+              protocol: TCP
+          env:
+            - name: PORT
+              value: "3002"
+            - name: NODE_ENV
+              value: "production"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3002
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3002
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities:
+              drop:
+                - ALL
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault

@@ -1,0 +1,100 @@
+version: "3.9"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SampleAPIs — 로컬 개발 환경
+#
+# 포함 서비스:
+#   keycloak   : 외부 IdP (OAuth2/OIDC), http://localhost:8080
+#   salary-api : API 2 (Python FastAPI + RBAC),  http://localhost:8001
+#   library-api: API 1 (Node.js Express CRUD),   http://localhost:3000
+#
+# 빠른 시작:
+#   cd local-dev
+#   docker compose up --build
+#
+# Keycloak 초기 설정 후 realm import:
+#   docker compose exec keycloak /opt/keycloak/bin/kc.sh import \
+#     --file /tmp/realm-export/corp-realm.json
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  sample-net:
+    driver: bridge
+
+volumes:
+  keycloak-data:
+
+services:
+
+  # ── Keycloak ──────────────────────────────────────────────────────────────
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0
+    container_name: keycloak
+    command:
+      - start-dev                     # 개발 모드 (TLS 불필요)
+      - --import-realm                # /opt/keycloak/data/import/ 의 realm json 자동 import
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_DB: dev-mem                  # 인메모리 DB (재시작 시 초기화됨)
+      KC_HTTP_PORT: "8080"
+      KC_HOSTNAME_STRICT: "false"
+      KC_HOSTNAME_STRICT_HTTPS: "false"
+      KC_HTTP_ENABLED: "true"
+      KC_LOG_LEVEL: INFO
+    ports:
+      - "8080:8080"
+    volumes:
+      # corp-realm.json 을 자동으로 import 합니다
+      - ./keycloak/realm-export:/opt/keycloak/data/import:ro
+    networks:
+      - sample-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health/ready || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+
+  # ── Salary API (API 2) ────────────────────────────────────────────────────
+  salary-api:
+    build:
+      context: ../api2-salary
+      dockerfile: Dockerfile
+    container_name: salary-api
+    ports:
+      - "8001:8001"
+    environment:
+      KEYCLOAK_URL: http://keycloak:8080
+      KEYCLOAK_REALM: corp
+      KEYCLOAK_AUDIENCE: salary-api
+      TOKEN_HEADER_NAME: Authorization
+    networks:
+      - sample-net
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8001/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Library API (API 1) ───────────────────────────────────────────────────
+  library-api:
+    build:
+      context: ../api1-library
+      dockerfile: Dockerfile
+    container_name: library-api
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: "3000"
+      NODE_ENV: development
+    networks:
+      - sample-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:3000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5

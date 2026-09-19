@@ -1,0 +1,1105 @@
+openapi: "3.0.3"
+
+info:
+  title: Tours Management API
+  version: "1.0.0"
+  description: |
+    **Tours Management REST API** — IBM API Connect Sample
+
+    Manage cruise tours, customers, and bookings.  
+    Based on the open-source [nodetours](https://github.com/przemekulik/nodetours) project,
+    refactored to pure REST with in-memory storage (no MongoDB, no GraphQL).
+
+    ## Resources
+    | Resource | Base Path | Description |
+    |---|---|---|
+    | Cruises | `/cruises` | Browse available cruise itineraries |
+    | Customers | `/customers` | Manage traveller profiles |
+    | Bookings | `/bookings` | Create and manage cruise reservations |
+
+    ## Authentication
+    No authentication required — this is a demonstration API.
+
+    ## Notes
+    - Customer identity key is `emailAddress`
+    - Booking identity key is `bookingID` (integer, auto-assigned)
+    - All data is in-memory; it resets when the server restarts
+  contact:
+    name: IBM API Connect Sample APIs
+    url: https://github.com/your-org/sample-apis
+  license:
+    name: Apache 2.0
+
+servers:
+  - url: http://localhost:3002
+    description: Local development server
+  - url: https://tours-api.apps.your-cluster.example.com
+    description: OpenShift production (replace with real host)
+  - url: https://tours-api.your-cluster.example.com
+    description: Kubernetes production (replace with real host)
+
+tags:
+  - name: System
+    description: Health check and API metadata
+  - name: Cruises
+    description: Browse and filter cruise itineraries
+  - name: Customers
+    description: Create and manage customer profiles
+  - name: Bookings
+    description: Create and manage cruise bookings
+
+# =============================================================================
+# PATHS
+# =============================================================================
+paths:
+
+  # ── / ─────────────────────────────────────────────────────────────────────
+  /:
+    get:
+      tags: [System]
+      summary: API information
+      operationId: getApiInfo
+      description: Returns API name, version, and a summary of all available endpoints.
+      responses:
+        "200":
+          description: API metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiInfo"
+              example:
+                name: Tours Management API
+                version: "1.0.0"
+                description: Sample REST API for IBM API Connect demonstration
+
+  # ── /health ───────────────────────────────────────────────────────────────
+  /health:
+    get:
+      tags: [System]
+      summary: Health check
+      operationId: getHealth
+      description: "Returns HTTP 200 with `status: ok` when the service is healthy."
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+              example:
+                status: ok
+                timestamp: "2025-01-15T10:00:00.000Z"
+
+  # ── /cruises ──────────────────────────────────────────────────────────────
+  /cruises:
+    get:
+      tags: [Cruises]
+      summary: List all cruises
+      operationId: listCruises
+      description: |
+        Returns all available cruise itineraries.  
+        Optionally filter by start/end date window, departure port, or duration.
+        All query parameters are optional and combinable.
+      parameters:
+        - $ref: "#/components/parameters/QueryStartDate"
+        - $ref: "#/components/parameters/QueryEndDate"
+        - $ref: "#/components/parameters/QueryStartPort"
+        - $ref: "#/components/parameters/QueryNumDays"
+      responses:
+        "200":
+          description: Cruise list returned successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CruiseListResponse"
+              examples:
+                allCruises:
+                  summary: All cruises (no filter)
+                  value:
+                    total: 3
+                    data:
+                      - cruiseID: CRUISE-001
+                        title: Mediterranean Discovery
+                        description: Experience the breathtaking beauty of the Mediterranean.
+                        startDate: "2025-06-01"
+                        endDate: "2025-06-15"
+                        startPort: Barcelona
+                        numDays: 14
+                        roomTypes: []
+                filtered:
+                  summary: Filtered by startPort
+                  value:
+                    total: 1
+                    data:
+                      - cruiseID: CRUISE-002
+                        title: Caribbean Paradise
+                        description: Sail through turquoise Caribbean waters.
+                        startDate: "2025-08-10"
+                        endDate: "2025-08-17"
+                        startPort: Miami
+                        numDays: 7
+                        roomTypes: []
+
+  # ── /cruises/{cruiseId} ───────────────────────────────────────────────────
+  /cruises/{cruiseId}:
+    parameters:
+      - $ref: "#/components/parameters/PathCruiseId"
+    get:
+      tags: [Cruises]
+      summary: Get a cruise by ID
+      operationId: getCruiseById
+      description: Returns a single cruise including all available room types and pricing.
+      responses:
+        "200":
+          description: Cruise found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Cruise"
+              example:
+                cruiseID: CRUISE-001
+                title: Mediterranean Discovery
+                description: Experience the breathtaking beauty of the Mediterranean.
+                startDate: "2025-06-01"
+                endDate: "2025-06-15"
+                startPort: Barcelona
+                numDays: 14
+                roomTypes:
+                  - roomID: INT
+                    name: Interior Cabin
+                    pricePerNight: 120
+                    currency: USD
+                    maxOccupancy: 2
+        "404":
+          $ref: "#/components/responses/CruiseNotFound"
+
+  # ── /customers ────────────────────────────────────────────────────────────
+  /customers:
+    get:
+      tags: [Customers]
+      summary: List all customers
+      operationId: listCustomers
+      description: Returns all registered customer profiles.
+      responses:
+        "200":
+          description: Customer list returned successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CustomerListResponse"
+              example:
+                total: 3
+                data:
+                  - emailAddress: alice@tours.com
+                    firstName: Alice
+                    lastName: Smith
+                    phone: "+1-555-0101"
+                    createdAt: "2024-01-15T10:00:00.000Z"
+
+    post:
+      tags: [Customers]
+      summary: Create a new customer
+      operationId: createCustomer
+      description: |
+        Creates a new customer profile.  
+        The `emailAddress` field is the unique identifier and must not already exist.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CustomerCreateRequest"
+            examples:
+              minimal:
+                summary: Minimal required fields
+                value:
+                  emailAddress: dave@tours.com
+                  firstName: Dave
+                  lastName: Brown
+              full:
+                summary: All fields
+                value:
+                  emailAddress: eva@tours.com
+                  firstName: Eva
+                  lastName: Martinez
+                  phone: "+34-91-000-0001"
+                  address:
+                    street: "1 Gran Via"
+                    city: Madrid
+                    state: ""
+                    postalCode: "28001"
+                    country: Spain
+      responses:
+        "201":
+          description: Customer created successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Customer"
+              example:
+                emailAddress: dave@tours.com
+                firstName: Dave
+                lastName: Brown
+                phone: null
+                address: {}
+                createdAt: "2025-01-15T10:00:00.000Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          $ref: "#/components/responses/CustomerConflict"
+
+  # ── /customers/{customerId} ───────────────────────────────────────────────
+  /customers/{customerId}:
+    parameters:
+      - $ref: "#/components/parameters/PathCustomerId"
+    get:
+      tags: [Customers]
+      summary: Get a customer by email address
+      operationId: getCustomerById
+      description: Returns a single customer profile identified by email address.
+      responses:
+        "200":
+          description: Customer found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Customer"
+              example:
+                emailAddress: alice@tours.com
+                firstName: Alice
+                lastName: Smith
+                phone: "+1-555-0101"
+                address:
+                  street: 123 Harbour View
+                  city: San Francisco
+                  state: CA
+                  postalCode: "94101"
+                  country: USA
+                createdAt: "2024-01-15T10:00:00.000Z"
+        "404":
+          $ref: "#/components/responses/CustomerNotFound"
+
+    put:
+      tags: [Customers]
+      summary: Update a customer (full replace)
+      operationId: updateCustomer
+      description: |
+        Replaces mutable customer fields.  
+        The `emailAddress` (used as the path `{customerId}`) and `createdAt`
+        are read-only and are not affected by this request.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CustomerUpdateRequest"
+            example:
+              firstName: Alice
+              lastName: Smith-Jones
+              phone: "+1-555-9999"
+              address:
+                street: 456 New Street
+                city: San Francisco
+                state: CA
+                postalCode: "94102"
+                country: USA
+      responses:
+        "200":
+          description: Customer updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Customer"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/CustomerNotFound"
+
+    delete:
+      tags: [Customers]
+      summary: Delete a customer
+      operationId: deleteCustomer
+      description: |
+        Permanently removes a customer profile.  
+        Returns 409 if the customer has existing bookings — delete or cancel
+        those bookings first.
+      responses:
+        "200":
+          description: Customer deleted successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CustomerDeleteResponse"
+              example:
+                message: Customer deleted successfully
+                customer:
+                  emailAddress: dave@tours.com
+                  firstName: Dave
+                  lastName: Brown
+        "404":
+          $ref: "#/components/responses/CustomerNotFound"
+        "409":
+          $ref: "#/components/responses/CustomerHasBookings"
+
+  # ── /bookings ─────────────────────────────────────────────────────────────
+  /bookings:
+    get:
+      tags: [Bookings]
+      summary: List all bookings
+      operationId: listBookings
+      description: |
+        Returns all bookings. Optionally filter by `cruiseID` or `customerID`.
+      parameters:
+        - $ref: "#/components/parameters/QueryCruiseID"
+        - $ref: "#/components/parameters/QueryCustomerID"
+      responses:
+        "200":
+          description: Booking list returned successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BookingListResponse"
+              examples:
+                all:
+                  summary: All bookings
+                  value:
+                    total: 2
+                    data:
+                      - bookingID: 1001
+                        cruiseID: CRUISE-001
+                        customerID: alice@tours.com
+                        room:
+                          roomID: BAL
+                          numRooms: 1
+                        status: confirmed
+                        bookedAt: "2024-11-01T08:00:00.000Z"
+                filtered:
+                  summary: Filtered by cruiseID
+                  value:
+                    total: 1
+                    data:
+                      - bookingID: 1001
+                        cruiseID: CRUISE-001
+                        customerID: alice@tours.com
+                        room:
+                          roomID: BAL
+                          numRooms: 1
+                        status: confirmed
+                        bookedAt: "2024-11-01T08:00:00.000Z"
+
+    post:
+      tags: [Bookings]
+      summary: Create a new booking
+      operationId: createBooking
+      description: |
+        Creates a new cruise booking.  
+        Both `cruiseID` and `customerID` must refer to existing resources.  
+        The `roomID` must be valid for the selected cruise.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BookingCreateRequest"
+            examples:
+              basic:
+                summary: Standard booking
+                value:
+                  cruiseID: CRUISE-002
+                  customerID: carol@tours.com
+                  room:
+                    roomID: BAL
+                    numRooms: 1
+              suite:
+                summary: Suite booking for 2 rooms
+                value:
+                  cruiseID: CRUISE-001
+                  customerID: bob@tours.com
+                  room:
+                    roomID: STE
+                    numRooms: 2
+      responses:
+        "201":
+          description: Booking created successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Booking"
+              example:
+                bookingID: 1003
+                cruiseID: CRUISE-002
+                customerID: carol@tours.com
+                room:
+                  roomID: BAL
+                  numRooms: 1
+                status: confirmed
+                bookedAt: "2025-01-15T10:00:00.000Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/BookingRefNotFound"
+
+  # ── /bookings/{bookingId} ─────────────────────────────────────────────────
+  /bookings/{bookingId}:
+    parameters:
+      - $ref: "#/components/parameters/PathBookingId"
+    get:
+      tags: [Bookings]
+      summary: Get a booking by ID
+      operationId: getBookingById
+      description: Returns a single booking identified by its integer `bookingID`.
+      responses:
+        "200":
+          description: Booking found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Booking"
+              example:
+                bookingID: 1001
+                cruiseID: CRUISE-001
+                customerID: alice@tours.com
+                room:
+                  roomID: BAL
+                  numRooms: 1
+                status: confirmed
+                bookedAt: "2024-11-01T08:00:00.000Z"
+        "404":
+          $ref: "#/components/responses/BookingNotFound"
+
+    put:
+      tags: [Bookings]
+      summary: Update a booking
+      operationId: updateBooking
+      description: |
+        Updates the room selection or status of an existing booking.  
+        The `roomID` must be valid for the cruise associated with this booking.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BookingUpdateRequest"
+            examples:
+              changeRoom:
+                summary: Upgrade to suite
+                value:
+                  room:
+                    roomID: STE
+                    numRooms: 1
+              cancelBooking:
+                summary: Cancel booking
+                value:
+                  status: cancelled
+      responses:
+        "200":
+          description: Booking updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Booking"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/BookingNotFound"
+
+    delete:
+      tags: [Bookings]
+      summary: Delete a booking
+      operationId: deleteBooking
+      description: Permanently removes the booking record.
+      responses:
+        "200":
+          description: Booking deleted successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BookingDeleteResponse"
+              example:
+                message: Booking deleted successfully
+                booking:
+                  bookingID: 1003
+                  cruiseID: CRUISE-002
+                  customerID: carol@tours.com
+                  room:
+                    roomID: BAL
+                    numRooms: 1
+                  status: confirmed
+                  bookedAt: "2025-01-15T10:00:00.000Z"
+        "404":
+          $ref: "#/components/responses/BookingNotFound"
+
+# =============================================================================
+# COMPONENTS
+# =============================================================================
+components:
+
+  # ── Schemas ────────────────────────────────────────────────────────────────
+  schemas:
+
+    # ── System ──────────────────────────────────────────────────────────────
+    HealthResponse:
+      type: object
+      description: Health check response
+      required: [status, timestamp]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+          example: ok
+        timestamp:
+          type: string
+          format: date-time
+          readOnly: true
+          example: "2025-01-15T10:00:00.000Z"
+
+    ApiInfo:
+      type: object
+      description: API metadata and endpoint summary
+      properties:
+        name:
+          type: string
+          example: Tours Management API
+        version:
+          type: string
+          example: "1.0.0"
+        description:
+          type: string
+        endpoints:
+          type: object
+
+    # ── Room Type ────────────────────────────────────────────────────────────
+    RoomType:
+      type: object
+      description: A cabin/room type available on a cruise
+      required: [roomID, name, pricePerNight, currency, maxOccupancy]
+      properties:
+        roomID:
+          type: string
+          description: Short room type code (INT, BAL, STE)
+          enum: [INT, BAL, STE]
+          example: BAL
+        name:
+          type: string
+          description: Human-readable room type name
+          example: Balcony Cabin
+        description:
+          type: string
+          description: Detailed room description
+          example: Spacious cabin with private balcony and sea view
+        maxOccupancy:
+          type: integer
+          format: int32
+          minimum: 1
+          description: Maximum number of guests allowed
+          example: 2
+        pricePerNight:
+          type: number
+          format: float
+          minimum: 0
+          description: Price per night in the listed currency
+          example: 220
+        currency:
+          type: string
+          pattern: "^[A-Z]{3}$"
+          description: ISO 4217 currency code
+          example: USD
+
+    # ── Cruise ───────────────────────────────────────────────────────────────
+    Cruise:
+      type: object
+      description: A cruise itinerary including room types
+      required: [cruiseID, title, description, startDate, endDate, startPort, numDays, roomTypes]
+      properties:
+        cruiseID:
+          type: string
+          readOnly: true
+          description: Unique cruise identifier
+          pattern: "^CRUISE-[0-9]{3}$"
+          example: CRUISE-001
+        title:
+          type: string
+          description: Cruise name/title
+          example: Mediterranean Discovery
+        description:
+          type: string
+          description: Detailed description of the itinerary
+          example: Experience the breathtaking beauty of the Mediterranean.
+        startDate:
+          type: string
+          format: date
+          description: Departure date (YYYY-MM-DD)
+          example: "2025-06-01"
+        endDate:
+          type: string
+          format: date
+          description: Return date (YYYY-MM-DD)
+          example: "2025-06-15"
+        startPort:
+          type: string
+          description: Port of embarkation
+          example: Barcelona
+        numDays:
+          type: integer
+          format: int32
+          minimum: 1
+          description: Total cruise duration in days
+          example: 14
+        roomTypes:
+          type: array
+          description: Available cabin types with pricing
+          items:
+            $ref: "#/components/schemas/RoomType"
+
+    CruiseListResponse:
+      type: object
+      description: Paginated list of cruises
+      required: [total, data]
+      properties:
+        total:
+          type: integer
+          format: int32
+          description: Total number of cruises matching the filter
+          example: 3
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Cruise"
+
+    # ── Address ──────────────────────────────────────────────────────────────
+    Address:
+      type: object
+      description: Postal address
+      properties:
+        street:
+          type: string
+          example: 123 Harbour View
+        city:
+          type: string
+          example: San Francisco
+        state:
+          type: string
+          example: CA
+          nullable: true
+        postalCode:
+          type: string
+          example: "94101"
+        country:
+          type: string
+          example: USA
+
+    # ── Customer ─────────────────────────────────────────────────────────────
+    Customer:
+      type: object
+      description: Customer profile
+      required: [emailAddress, firstName, lastName]
+      properties:
+        emailAddress:
+          type: string
+          format: email
+          description: Unique customer identifier (email address)
+          readOnly: true
+          example: alice@tours.com
+        firstName:
+          type: string
+          description: Customer's given name
+          example: Alice
+        lastName:
+          type: string
+          description: Customer's family name
+          example: Smith
+        phone:
+          type: string
+          description: Contact phone number
+          nullable: true
+          example: "+1-555-0101"
+        address:
+          $ref: "#/components/schemas/Address"
+        createdAt:
+          type: string
+          format: date-time
+          readOnly: true
+          description: Timestamp when the customer was created
+          example: "2024-01-15T10:00:00.000Z"
+
+    CustomerCreateRequest:
+      type: object
+      description: Request body for creating a new customer
+      required: [emailAddress, firstName, lastName]
+      properties:
+        emailAddress:
+          type: string
+          format: email
+          description: Must be unique across all customers
+          example: dave@tours.com
+        firstName:
+          type: string
+          example: Dave
+        lastName:
+          type: string
+          example: Brown
+        phone:
+          type: string
+          nullable: true
+          example: "+1-555-0199"
+        address:
+          $ref: "#/components/schemas/Address"
+
+    CustomerUpdateRequest:
+      type: object
+      description: Request body for updating a customer (all fields optional)
+      properties:
+        firstName:
+          type: string
+          example: Alice
+        lastName:
+          type: string
+          example: Smith-Jones
+        phone:
+          type: string
+          nullable: true
+          example: "+1-555-9999"
+        address:
+          $ref: "#/components/schemas/Address"
+
+    CustomerListResponse:
+      type: object
+      description: List of all customers
+      required: [total, data]
+      properties:
+        total:
+          type: integer
+          format: int32
+          example: 3
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Customer"
+
+    CustomerDeleteResponse:
+      type: object
+      required: [message, customer]
+      properties:
+        message:
+          type: string
+          example: Customer deleted successfully
+        customer:
+          $ref: "#/components/schemas/Customer"
+
+    # ── Booking ──────────────────────────────────────────────────────────────
+    BookingRoom:
+      type: object
+      description: Room selection for a booking
+      required: [roomID, numRooms]
+      properties:
+        roomID:
+          type: string
+          enum: [INT, BAL, STE]
+          description: Room type code matching the cruise's roomTypes
+          example: BAL
+        numRooms:
+          type: integer
+          format: int32
+          minimum: 1
+          description: Number of rooms of this type to book
+          example: 1
+
+    Booking:
+      type: object
+      description: A cruise booking record
+      required: [bookingID, cruiseID, customerID, room, status, bookedAt]
+      properties:
+        bookingID:
+          type: integer
+          format: int64
+          readOnly: true
+          description: Auto-assigned booking identifier
+          example: 1001
+        cruiseID:
+          type: string
+          description: Reference to the booked cruise
+          example: CRUISE-001
+        customerID:
+          type: string
+          format: email
+          description: Reference to the booking customer (emailAddress)
+          example: alice@tours.com
+        room:
+          $ref: "#/components/schemas/BookingRoom"
+        status:
+          type: string
+          enum: [confirmed, cancelled, pending]
+          description: Current booking status
+          example: confirmed
+        bookedAt:
+          type: string
+          format: date-time
+          readOnly: true
+          description: Timestamp when the booking was created
+          example: "2024-11-01T08:00:00.000Z"
+
+    BookingCreateRequest:
+      type: object
+      description: Request body for creating a booking
+      required: [cruiseID, customerID, room]
+      properties:
+        cruiseID:
+          type: string
+          description: Must reference an existing cruise
+          example: CRUISE-002
+        customerID:
+          type: string
+          format: email
+          description: Must reference an existing customer (emailAddress)
+          example: carol@tours.com
+        room:
+          $ref: "#/components/schemas/BookingRoom"
+
+    BookingUpdateRequest:
+      type: object
+      description: Request body for updating a booking
+      properties:
+        room:
+          $ref: "#/components/schemas/BookingRoom"
+        status:
+          type: string
+          enum: [confirmed, cancelled, pending]
+          example: cancelled
+
+    BookingListResponse:
+      type: object
+      description: List of bookings
+      required: [total, data]
+      properties:
+        total:
+          type: integer
+          format: int32
+          example: 2
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Booking"
+
+    BookingDeleteResponse:
+      type: object
+      required: [message, booking]
+      properties:
+        message:
+          type: string
+          example: Booking deleted successfully
+        booking:
+          $ref: "#/components/schemas/Booking"
+
+    # ── Error Schemas ─────────────────────────────────────────────────────────
+    ErrorResponse:
+      type: object
+      description: Generic error response
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: Human-readable error message
+          example: Resource not found
+
+    ErrorConflictEmail:
+      type: object
+      description: Email address conflict error
+      required: [error, emailAddress]
+      properties:
+        error:
+          type: string
+          example: A customer with this email address already exists
+        emailAddress:
+          type: string
+          format: email
+          example: dave@tours.com
+
+    ErrorCustomerHasBookings:
+      type: object
+      description: Cannot delete customer with existing bookings
+      required: [error, bookings]
+      properties:
+        error:
+          type: string
+          example: Cannot delete customer with existing bookings
+        bookings:
+          type: integer
+          format: int32
+          description: Number of existing bookings for this customer
+          example: 2
+
+  # ── Parameters ─────────────────────────────────────────────────────────────
+  parameters:
+
+    PathCruiseId:
+      name: cruiseId
+      in: path
+      required: true
+      description: Cruise identifier (e.g. CRUISE-001)
+      schema:
+        type: string
+        pattern: "^CRUISE-[0-9]{3}$"
+      example: CRUISE-001
+
+    PathCustomerId:
+      name: customerId
+      in: path
+      required: true
+      description: Customer identifier (emailAddress)
+      schema:
+        type: string
+        format: email
+      example: alice@tours.com
+
+    PathBookingId:
+      name: bookingId
+      in: path
+      required: true
+      description: Booking identifier (integer)
+      schema:
+        type: integer
+        format: int64
+      example: 1001
+
+    QueryStartDate:
+      name: startDate
+      in: query
+      required: false
+      description: Filter cruises with startDate on or after this date (YYYY-MM-DD)
+      schema:
+        type: string
+        format: date
+      example: "2025-06-01"
+
+    QueryEndDate:
+      name: endDate
+      in: query
+      required: false
+      description: Filter cruises with endDate on or before this date (YYYY-MM-DD)
+      schema:
+        type: string
+        format: date
+      example: "2025-09-30"
+
+    QueryStartPort:
+      name: startPort
+      in: query
+      required: false
+      description: Filter cruises by port of embarkation (case-insensitive)
+      schema:
+        type: string
+      examples:
+        barcelona:
+          value: Barcelona
+        miami:
+          value: Miami
+
+    QueryNumDays:
+      name: numDays
+      in: query
+      required: false
+      description: Filter cruises with exactly this number of days
+      schema:
+        type: integer
+        format: int32
+        minimum: 1
+      example: 7
+
+    QueryCruiseID:
+      name: cruiseID
+      in: query
+      required: false
+      description: Filter bookings by cruise ID
+      schema:
+        type: string
+      example: CRUISE-001
+
+    QueryCustomerID:
+      name: customerID
+      in: query
+      required: false
+      description: Filter bookings by customer ID (emailAddress)
+      schema:
+        type: string
+        format: email
+      example: alice@tours.com
+
+  # ── Reusable Responses ──────────────────────────────────────────────────────
+  responses:
+
+    BadRequest:
+      description: Bad request — missing or invalid fields
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: "cruiseID, customerID, and room.roomID are required fields"
+
+    CruiseNotFound:
+      description: Cruise not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: Cruise not found
+            cruiseID: CRUISE-999
+
+    CustomerNotFound:
+      description: Customer not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: Customer not found
+            emailAddress: unknown@tours.com
+
+    CustomerConflict:
+      description: Email address already registered
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorConflictEmail"
+          example:
+            error: A customer with this email address already exists
+            emailAddress: alice@tours.com
+
+    CustomerHasBookings:
+      description: Customer cannot be deleted — has existing bookings
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorCustomerHasBookings"
+          example:
+            error: Cannot delete customer with existing bookings
+            bookings: 1
+
+    BookingNotFound:
+      description: Booking not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: Booking not found
+            bookingID: 9999
+
+    BookingRefNotFound:
+      description: Referenced cruise or customer does not exist
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            cruiseNotFound:
+              summary: Cruise not found
+              value:
+                error: Cruise not found
+                cruiseID: CRUISE-999
+            customerNotFound:
+              summary: Customer not found
+              value:
+                error: Customer not found
+                customerID: unknown@tours.com

@@ -1,0 +1,40 @@
+# ── Ingress (nginx Ingress Controller) ───────────────────────────────────────
+# 사전 요건: nginx Ingress Controller 설치
+#   kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.10.1/deploy/static/provider/cloud/deploy.yaml
+#
+# host 값을 실제 도메인 또는 클러스터 IP로 교체하세요.
+#   예) library-api.your-cluster.example.com
+#
+# TLS 설정:
+#   - cert-manager 사용 시: tls 섹션 주석 해제 + annotations의 cert-manager 항목 활성화
+#   - 수동 Secret 사용 시: tls 섹션 주석 해제 후 secretName에 TLS Secret 이름 입력
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: library-api
+  namespace: sample-apis
+  labels:
+    app: library-api
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    # cert-manager 자동 TLS 발급 (사용 시 주석 해제)
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: library-api.your-cluster.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: library-api
+                port:
+                  number: 3000
+  # TLS 섹션 (HTTPS 사용 시 주석 해제)
+  # tls:
+  #   - hosts:
+  #       - library-api.your-cluster.example.com
+  #     secretName: library-api-tls

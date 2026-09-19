@@ -1,0 +1,886 @@
+{
+  "info": {
+    "_postman_id": "sample-apis-collection-v1",
+    "name": "IBM API Connect — Sample APIs",
+    "description": "# IBM API Connect Sample APIs\n\n네 개의 샘플 API 테스트 컬렉션입니다.\n\n## 포함된 API\n- **API 1**: Library Management API (Node.js, 인증 없음, REST)\n- **API 2**: Salary Management API (Python, Keycloak OAuth2 RBAC, REST)\n- **API 3**: Tours Management API (Node.js, 인증 없음, REST)\n- **API 4**: Tours GraphQL API (Node.js, Apollo Server v4, GraphQL)\n\n## 사전 준비\n1. `local-dev/` 에서 `docker compose up --build` 실행\n2. `./init-keycloak.sh` 실행하여 Keycloak 초기화\n\n## 환경 변수 (Postman Environment 설정)\n- `LIBRARY_URL`: http://localhost:3000\n- `SALARY_URL`: http://localhost:8001\n- `KEYCLOAK_URL`: http://localhost:8080\n- `KEYCLOAK_REALM`: corp\n- `TOURS_URL`: http://localhost:3002\n- `GRAPHQL_URL`: http://localhost:4000",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "LIBRARY_URL",   "value": "http://localhost:3000", "type": "string" },
+    { "key": "SALARY_URL",    "value": "http://localhost:8001", "type": "string" },
+    { "key": "KEYCLOAK_URL",  "value": "http://localhost:8080", "type": "string" },
+    { "key": "KEYCLOAK_REALM","value": "corp",                  "type": "string" },
+    { "key": "alice_token",   "value": "",                      "type": "string" },
+    { "key": "carol_token",   "value": "",                      "type": "string" },
+    { "key": "hr_token",      "value": "",                      "type": "string" },
+    { "key": "TOURS_URL",     "value": "http://localhost:3002",  "type": "string" },
+    { "key": "GRAPHQL_URL",   "value": "http://localhost:4000",  "type": "string" },
+    { "key": "gql_booking_id","value": "",                       "type": "string" },
+    { "key": "gql_customer_email","value": "",                   "type": "string" }
+  ],
+  "item": [
+
+    {
+      "name": "🔑 Keycloak — 토큰 발급",
+      "description": "Keycloak에서 역할별 Access Token을 발급합니다.\n각 요청 실행 후 토큰이 컬렉션 변수에 자동 저장됩니다.",
+      "item": [
+        {
+          "name": "토큰 발급 — alice (employee)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const json = pm.response.json();",
+                  "    pm.collectionVariables.set('alice_token', json.access_token);",
+                  "    console.log('alice token saved');",
+                  "    pm.test('Token issued', () => pm.expect(json.access_token).to.be.a('string'));",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/x-www-form-urlencoded" }],
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                { "key": "grant_type", "value": "password" },
+                { "key": "client_id",  "value": "postman-client" },
+                { "key": "username",   "value": "alice" },
+                { "key": "password",   "value": "alice1234" }
+              ]
+            },
+            "url": "{{KEYCLOAK_URL}}/realms/{{KEYCLOAK_REALM}}/protocol/openid-connect/token"
+          }
+        },
+        {
+          "name": "토큰 발급 — carol (manager)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    pm.collectionVariables.set('carol_token', pm.response.json().access_token);",
+                  "    pm.test('Token issued', () => pm.expect(pm.response.json().access_token).to.be.a('string'));",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/x-www-form-urlencoded" }],
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                { "key": "grant_type", "value": "password" },
+                { "key": "client_id",  "value": "postman-client" },
+                { "key": "username",   "value": "carol" },
+                { "key": "password",   "value": "carol1234" }
+              ]
+            },
+            "url": "{{KEYCLOAK_URL}}/realms/{{KEYCLOAK_REALM}}/protocol/openid-connect/token"
+          }
+        },
+        {
+          "name": "토큰 발급 — hr-system (hr_system)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    pm.collectionVariables.set('hr_token', pm.response.json().access_token);",
+                  "    pm.test('Token issued', () => pm.expect(pm.response.json().access_token).to.be.a('string'));",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/x-www-form-urlencoded" }],
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                { "key": "grant_type", "value": "password" },
+                { "key": "client_id",  "value": "postman-client" },
+                { "key": "username",   "value": "hr-system" },
+                { "key": "password",   "value": "hrsystem1234" }
+              ]
+            },
+            "url": "{{KEYCLOAK_URL}}/realms/{{KEYCLOAK_REALM}}/protocol/openid-connect/token"
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "📚 API 1 — Library Management (인증 없음)",
+      "description": "Node.js Express CRUD API. 인증 없이 바로 사용 가능합니다.",
+      "item": [
+        {
+          "name": "Health Check",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));", "pm.test('status ok', () => pm.expect(pm.response.json().status).to.eql('ok'));"], "type": "text/javascript" } }],
+          "request": { "method": "GET", "url": "{{LIBRARY_URL}}/health" }
+        },
+        {
+          "name": "도서 목록 조회",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));", "pm.test('has total', () => pm.expect(pm.response.json()).to.have.property('total'));"], "type": "text/javascript" } }],
+          "request": { "method": "GET", "url": { "raw": "{{LIBRARY_URL}}/books", "host": ["{{LIBRARY_URL}}"], "path": ["books"] } }
+        },
+        {
+          "name": "도서 목록 — 필터(genre=programming)",
+          "request": { "method": "GET", "url": { "raw": "{{LIBRARY_URL}}/books?genre=programming&available=true", "query": [{ "key": "genre", "value": "programming" }, { "key": "available", "value": "true" }] } }
+        },
+        {
+          "name": "도서 등록",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                  "const json = pm.response.json();",
+                  "pm.collectionVariables.set('new_book_id', json.id);",
+                  "pm.test('has id', () => pm.expect(json.id).to.be.a('string'));"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"The Pragmatic Programmer\",\n  \"author\": \"David Thomas\",\n  \"isbn\": \"9780135957059\",\n  \"genre\": \"programming\",\n  \"publishedYear\": 2019,\n  \"stock\": 3\n}"
+            },
+            "url": "{{LIBRARY_URL}}/books"
+          }
+        },
+        {
+          "name": "도서 단건 조회",
+          "request": { "method": "GET", "url": "{{LIBRARY_URL}}/books/{{new_book_id}}" }
+        },
+        {
+          "name": "도서 부분 수정 (PATCH)",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"stock\": 5\n}" },
+            "url": "{{LIBRARY_URL}}/books/{{new_book_id}}"
+          }
+        },
+        {
+          "name": "대출 신청",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('loan_id', pm.response.json().loan.id);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"bookId\": \"{{new_book_id}}\",\n  \"borrowerName\": \"Alice\",\n  \"borrowerEmail\": \"alice@test.com\",\n  \"daysToLoan\": 14\n}"
+            },
+            "url": "{{LIBRARY_URL}}/loans"
+          }
+        },
+        {
+          "name": "도서 반납",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));"], "type": "text/javascript" } }],
+          "request": { "method": "PATCH", "url": "{{LIBRARY_URL}}/loans/{{loan_id}}/return" }
+        },
+        {
+          "name": "도서 삭제",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));"], "type": "text/javascript" } }],
+          "request": { "method": "DELETE", "url": "{{LIBRARY_URL}}/books/{{new_book_id}}" }
+        }
+      ]
+    },
+
+    {
+      "name": "💰 API 2 — Salary Management (Keycloak RBAC)",
+      "description": "Python FastAPI + Keycloak OAuth2/OIDC RBAC API.\n\n⚠️ 'Keycloak — 토큰 발급' 폴더를 먼저 실행하세요.",
+      "item": [
+        {
+          "name": "🟢 공개 엔드포인트",
+          "item": [
+            {
+              "name": "Health Check",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));"], "type": "text/javascript" } }],
+              "request": { "method": "GET", "url": "{{SALARY_URL}}/health" }
+            },
+            {
+              "name": "Keycloak 설정 확인",
+              "request": { "method": "GET", "url": "{{SALARY_URL}}/auth/config" }
+            },
+            {
+              "name": "JWKS 상태 확인",
+              "request": { "method": "GET", "url": "{{SALARY_URL}}/auth/jwks-status" }
+            }
+          ]
+        },
+        {
+          "name": "👤 alice (employee)",
+          "description": "alice는 본인 연봉만 조회/수정 가능합니다.",
+          "item": [
+            {
+              "name": "내 정보 확인 (/auth/me)",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));", "pm.test('role is employee', () => pm.expect(pm.response.json().role).to.eql('employee'));"], "type": "text/javascript" } }],
+              "request": {
+                "method": "GET",
+                "header": [{ "key": "Authorization", "value": "Bearer {{alice_token}}" }],
+                "url": "{{SALARY_URL}}/auth/me"
+              }
+            },
+            {
+              "name": "본인 연봉 조회 (/salaries/me) ✅",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));", "pm.test('is alice', () => pm.expect(pm.response.json().employee_id).to.include('alice'));"], "type": "text/javascript" } }],
+              "request": {
+                "method": "GET",
+                "header": [{ "key": "Authorization", "value": "Bearer {{alice_token}}" }],
+                "url": "{{SALARY_URL}}/salaries/me"
+              }
+            },
+            {
+              "name": "전체 조회 → 본인만 반환 (/salaries/) ✅",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));", "pm.test('only own record', () => pm.expect(pm.response.json().total).to.eql(1));"], "type": "text/javascript" } }],
+              "request": {
+                "method": "GET",
+                "header": [{ "key": "Authorization", "value": "Bearer {{alice_token}}" }],
+                "url": "{{SALARY_URL}}/salaries/"
+              }
+            },
+            {
+              "name": "타인 연봉 조회 → 403 ❌",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 403', () => pm.response.to.have.status(403));"], "type": "text/javascript" } }],
+              "request": {
+                "method": "GET",
+                "header": [{ "key": "Authorization", "value": "Bearer {{alice_token}}" }],
+                "url": "{{SALARY_URL}}/salaries/s002"
+              }
+            },
+            {
+              "name": "삭제 시도 → 403 ❌",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 403', () => pm.response.to.have.status(403));"], "type": "text/javascript" } }],
+              "request": {
+                "method": "DELETE",
+                "header": [{ "key": "Authorization", "value": "Bearer {{alice_token}}" }],
+                "url": "{{SALARY_URL}}/salaries/s001"
+              }
+            }
+          ]
+        },
+        {
+          "name": "👔 carol (manager, engineering)",
+          "description": "carol은 engineering 팀 전체 연봉을 조회/수정할 수 있습니다.",
+          "item": [
+            {
+              "name": "내 정보 확인 (/auth/me)",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('role is manager', () => pm.expect(pm.response.json().role).to.eql('manager'));"], "type": "text/javascript" } }],
+              "request": {
+                "method": "GET",
+                "header": [{ "key": "Authorization", "value": "Bearer {{carol_token}}" }],
+                "url": "{{SALARY_URL}}/auth/me"
+              }
+            },
+            {
+              "name": "팀 연봉 목록 조회 (/salaries/) ✅",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));", "pm.test('all engineering', () => { pm.response.json().data.forEach(r => pm.expect(r.team).to.eql('engineering')); });"], "type": "text/javascript" } }],
+              "request": {
+                "method": "GET",
+                "header": [{ "key": "Authorization", "value": "Bearer {{carol_token}}" }],
+                "url": "{{SALARY_URL}}/salaries/"
+              }
+            },
+            {
+              "name": "팀원 연봉 조회 (alice, s001) ✅",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));"], "type": "text/javascript" } }],
+              "request": {
+                "method": "GET",
+                "header": [{ "key": "Authorization", "value": "Bearer {{carol_token}}" }],
+                "url": "{{SALARY_URL}}/salaries/s001"
+              }
+            },
+            {
+              "name": "타팀 연봉 조회 → 403 ❌",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 403', () => pm.response.to.have.status(403));"], "type": "text/javascript" } }],
+              "request": {
+                "method": "GET",
+                "header": [{ "key": "Authorization", "value": "Bearer {{carol_token}}" }],
+                "url": "{{SALARY_URL}}/salaries/s005"
+              }
+            },
+            {
+              "name": "팀원 연봉 수정 (alice 보너스 인상) ✅",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));", "pm.test('updated by manager', () => pm.expect(pm.response.json().updated_by_role).to.eql('manager'));"], "type": "text/javascript" } }],
+              "request": {
+                "method": "PATCH",
+                "header": [{ "key": "Authorization", "value": "Bearer {{carol_token}}" }, { "key": "Content-Type", "value": "application/json" }],
+                "body": { "mode": "raw", "raw": "{\n  \"bonus\": 8000000\n}" },
+                "url": "{{SALARY_URL}}/salaries/s001"
+              }
+            },
+            {
+              "name": "삭제 시도 → 403 ❌",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 403', () => pm.response.to.have.status(403));"], "type": "text/javascript" } }],
+              "request": {
+                "method": "DELETE",
+                "header": [{ "key": "Authorization", "value": "Bearer {{carol_token}}" }],
+                "url": "{{SALARY_URL}}/salaries/s001"
+              }
+            }
+          ]
+        },
+        {
+          "name": "🏢 hr-system (hr_system)",
+          "description": "hr_system은 전체 연봉 조회/수정/삭제가 가능합니다.\n퇴사 처리 시 DELETE를 사용합니다.",
+          "item": [
+            {
+              "name": "내 정보 확인 (/auth/me)",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('role is hr_system', () => pm.expect(pm.response.json().role).to.eql('hr_system'));"], "type": "text/javascript" } }],
+              "request": {
+                "method": "GET",
+                "header": [{ "key": "Authorization", "value": "Bearer {{hr_token}}" }],
+                "url": "{{SALARY_URL}}/auth/me"
+              }
+            },
+            {
+              "name": "전체 연봉 목록 조회 ✅",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));", "pm.test('multiple records', () => pm.expect(pm.response.json().total).to.be.above(1));"], "type": "text/javascript" } }],
+              "request": {
+                "method": "GET",
+                "header": [{ "key": "Authorization", "value": "Bearer {{hr_token}}" }],
+                "url": "{{SALARY_URL}}/salaries/"
+              }
+            },
+            {
+              "name": "전체 연봉 수정 (임의 직원) ✅",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));"], "type": "text/javascript" } }],
+              "request": {
+                "method": "PATCH",
+                "header": [{ "key": "Authorization", "value": "Bearer {{hr_token}}" }, { "key": "Content-Type", "value": "application/json" }],
+                "body": { "mode": "raw", "raw": "{\n  \"base_salary\": 100000000,\n  \"bonus\": 15000000,\n  \"effective_date\": \"2025-01-01\"\n}" },
+                "url": "{{SALARY_URL}}/salaries/s004"
+              }
+            },
+            {
+              "name": "퇴사 처리 — 연봉 레코드 삭제 (s005) ✅",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 200 or 204', () => pm.expect(pm.response.code).to.be.oneOf([200, 204]));"], "type": "text/javascript" } }],
+              "request": {
+                "method": "DELETE",
+                "header": [{ "key": "Authorization", "value": "Bearer {{hr_token}}" }],
+                "url": "{{SALARY_URL}}/salaries/s005",
+                "description": "퇴사 처리 프로세스에서 HR 시스템이 호출합니다.\n이미 삭제된 경우 404를 반환합니다."
+              }
+            }
+          ]
+        },
+        {
+          "name": "⚠️ 에러 케이스",
+          "item": [
+            {
+              "name": "토큰 없음 → 401",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 401', () => pm.response.to.have.status(401));"], "type": "text/javascript" } }],
+              "request": { "method": "GET", "url": "{{SALARY_URL}}/salaries/me" }
+            },
+            {
+              "name": "잘못된 토큰 → 401 or 503",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 401 or 503', () => pm.expect(pm.response.code).to.be.oneOf([401, 503]));"], "type": "text/javascript" } }],
+              "request": {
+                "method": "GET",
+                "header": [{ "key": "Authorization", "value": "Bearer invalid.token.here" }],
+                "url": "{{SALARY_URL}}/salaries/me"
+              }
+            },
+            {
+              "name": "존재하지 않는 레코드 → 404",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 404', () => pm.response.to.have.status(404));"], "type": "text/javascript" } }],
+              "request": {
+                "method": "GET",
+                "header": [{ "key": "Authorization", "value": "Bearer {{hr_token}}" }],
+                "url": "{{SALARY_URL}}/salaries/s999"
+              }
+            }
+          ]
+        },
+        {
+          "name": "🔄 OBO — On-Behalf-Of Token Exchange",
+          "description": "서비스 A가 사용자 권한을 대신해서 서비스 B를 호출하는 OBO 패턴입니다.\nRFC 8693 Token Exchange 표준을 따릅니다.\n\n⚠️ Keycloak Token Exchange 기능이 활성화된 환경에서만 /obo/token이 작동합니다.",
+          "item": [
+            {
+              "name": "OBO 설정 확인 (/obo/info)",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));", "pm.test('obo enabled', () => pm.expect(pm.response.json().obo_enabled).to.be.true);"], "type": "text/javascript" } }],
+              "request": {
+                "method": "GET",
+                "url": "{{SALARY_URL}}/obo/info",
+                "description": "인증 없이 OBO 설정 정보를 확인합니다."
+              }
+            },
+            {
+              "name": "OBO 토큰 교환 — alice → other-service",
+              "event": [{ "listen": "test", "script": { "exec": ["if (pm.response.code === 200) {", "    const d = pm.response.json();", "    pm.test('has access_token', () => pm.expect(d.access_token).to.be.a('string'));", "    pm.test('original_user is alice', () => pm.expect(d.original_user).to.eql('alice'));", "    pm.collectionVariables.set('obo_token', d.access_token);", "} else {", "    pm.test('OBO setup required (400/503 expected without Keycloak config)', () => pm.expect(pm.response.code).to.be.oneOf([200, 400, 503]));", "}"], "type": "text/javascript" } }],
+              "request": {
+                "method": "POST",
+                "header": [
+                  { "key": "Authorization", "value": "Bearer {{alice_token}}" },
+                  { "key": "Content-Type", "value": "application/json" }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"target_audience\": \"other-service\",\n  \"scope\": \"openid profile email\"\n}"
+                },
+                "url": "{{SALARY_URL}}/obo/token",
+                "description": "alice의 토큰을 'other-service' 대상으로 교환합니다.\n\nKeycloak Token Exchange 미설정 시 400/503이 반환됩니다.\nKeycloak 설정 방법은 /obo/info 응답의 required_keycloak_setup을 참고하세요."
+              }
+            },
+            {
+              "name": "OBO 토큰 교환 — carol(manager) → reporting-service",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 200 or error (Keycloak setup needed)', () => pm.expect(pm.response.code).to.be.oneOf([200, 400, 503]));", "if (pm.response.code === 200) { pm.test('original_role is manager', () => pm.expect(pm.response.json().original_role).to.eql('manager')); }"], "type": "text/javascript" } }],
+              "request": {
+                "method": "POST",
+                "header": [
+                  { "key": "Authorization", "value": "Bearer {{carol_token}}" },
+                  { "key": "Content-Type", "value": "application/json" }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"target_audience\": \"reporting-service\"\n}"
+                },
+                "url": "{{SALARY_URL}}/obo/token"
+              }
+            },
+            {
+              "name": "OBO 인증 없이 요청 → 401",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 401', () => pm.response.to.have.status(401));"], "type": "text/javascript" } }],
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": { "mode": "raw", "raw": "{\n  \"target_audience\": \"other-service\"\n}" },
+                "url": "{{SALARY_URL}}/obo/token"
+              }
+            }
+          ]
+        }
+      ]
+    },
+
+    {
+      "name": "📍 API 3 — Tours Management",
+      "description": "Tours Management API (Node.js, 인증 없음, 포트 3002)\nCruises/Customers/Bookings CRUD 테스트",
+      "item": [
+
+        {
+          "name": "System",
+          "item": [
+            {
+              "name": "Health Check",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));", "pm.test('status ok', () => pm.expect(pm.response.json().status).to.eql('ok'));"], "type": "text/javascript" } }],
+              "request": { "method": "GET", "url": "{{TOURS_URL}}/health" }
+            },
+            {
+              "name": "API Info",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));", "pm.test('name exists', () => pm.expect(pm.response.json().name).to.include('Tours'));"], "type": "text/javascript" } }],
+              "request": { "method": "GET", "url": "{{TOURS_URL}}/" }
+            }
+          ]
+        },
+
+        {
+          "name": "Cruises",
+          "item": [
+            {
+              "name": "List All Cruises",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));", "pm.test('total >= 3', () => pm.expect(pm.response.json().total).to.be.at.least(3));"], "type": "text/javascript" } }],
+              "request": { "method": "GET", "url": "{{TOURS_URL}}/cruises" }
+            },
+            {
+              "name": "Get Cruise by ID",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));", "pm.test('cruiseID matches', () => pm.expect(pm.response.json().cruiseID).to.eql('CRUISE-001'));"], "type": "text/javascript" } }],
+              "request": { "method": "GET", "url": "{{TOURS_URL}}/cruises/CRUISE-001" }
+            },
+            {
+              "name": "Filter Cruises by Port",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));", "pm.test('filtered by port', () => pm.response.json().data.forEach(c => pm.expect(c.startPort.toLowerCase()).to.eql('miami')));"], "type": "text/javascript" } }],
+              "request": { "method": "GET", "url": { "raw": "{{TOURS_URL}}/cruises?startPort=Miami", "query": [{ "key": "startPort", "value": "Miami" }], "host": ["{{TOURS_URL}}"], "path": ["cruises"] } }
+            },
+            {
+              "name": "Filter Cruises by Duration",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));"], "type": "text/javascript" } }],
+              "request": { "method": "GET", "url": { "raw": "{{TOURS_URL}}/cruises?numDays=7", "query": [{ "key": "numDays", "value": "7" }], "host": ["{{TOURS_URL}}"], "path": ["cruises"] } }
+            },
+            {
+              "name": "404 — Cruise Not Found",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 404', () => pm.response.to.have.status(404));"], "type": "text/javascript" } }],
+              "request": { "method": "GET", "url": "{{TOURS_URL}}/cruises/CRUISE-999" }
+            }
+          ]
+        },
+
+        {
+          "name": "Customers",
+          "item": [
+            {
+              "name": "List All Customers",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));", "pm.test('total >= 3', () => pm.expect(pm.response.json().total).to.be.at.least(3));"], "type": "text/javascript" } }],
+              "request": { "method": "GET", "url": "{{TOURS_URL}}/customers" }
+            },
+            {
+              "name": "Create Customer",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                      "pm.collectionVariables.set('tours_customer_id', pm.response.json().emailAddress);",
+                      "pm.test('emailAddress returned', () => pm.expect(pm.response.json().emailAddress).to.eql('postman_test@tours.com'));"
+                    ],
+                    "type": "text/javascript"
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": { "mode": "raw", "raw": "{\n  \"emailAddress\": \"postman_test@tours.com\",\n  \"firstName\": \"Postman\",\n  \"lastName\": \"Tester\",\n  \"phone\": \"+1-555-0100\"\n}" },
+                "url": "{{TOURS_URL}}/customers"
+              }
+            },
+            {
+              "name": "Get Customer",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));", "pm.test('email matches', () => pm.expect(pm.response.json().emailAddress).to.eql('postman_test@tours.com'));"], "type": "text/javascript" } }],
+              "request": { "method": "GET", "url": "{{TOURS_URL}}/customers/postman_test@tours.com" }
+            },
+            {
+              "name": "Update Customer",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));", "pm.test('name updated', () => pm.expect(pm.response.json().lastName).to.eql('Updated'));"], "type": "text/javascript" } }],
+              "request": {
+                "method": "PUT",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": { "mode": "raw", "raw": "{\n  \"firstName\": \"Postman\",\n  \"lastName\": \"Updated\"\n}" },
+                "url": "{{TOURS_URL}}/customers/postman_test@tours.com"
+              }
+            },
+            {
+              "name": "409 — Duplicate Email",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 409', () => pm.response.to.have.status(409));"], "type": "text/javascript" } }],
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": { "mode": "raw", "raw": "{\n  \"emailAddress\": \"alice@tours.com\",\n  \"firstName\": \"Alice\",\n  \"lastName\": \"X\"\n}" },
+                "url": "{{TOURS_URL}}/customers"
+              }
+            },
+            {
+              "name": "409 — Delete Customer with Bookings",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 409', () => pm.response.to.have.status(409));"], "type": "text/javascript" } }],
+              "request": { "method": "DELETE", "url": "{{TOURS_URL}}/customers/alice@tours.com" }
+            }
+          ]
+        },
+
+        {
+          "name": "Bookings",
+          "item": [
+            {
+              "name": "List All Bookings",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));", "pm.test('total >= 2', () => pm.expect(pm.response.json().total).to.be.at.least(2));"], "type": "text/javascript" } }],
+              "request": { "method": "GET", "url": "{{TOURS_URL}}/bookings" }
+            },
+            {
+              "name": "Create Booking",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                      "pm.collectionVariables.set('tours_booking_id', pm.response.json().bookingID);",
+                      "pm.test('bookingID is number', () => pm.expect(pm.response.json().bookingID).to.be.a('number'));"
+                    ],
+                    "type": "text/javascript"
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": { "mode": "raw", "raw": "{\n  \"cruiseID\": \"CRUISE-002\",\n  \"customerID\": \"postman_test@tours.com\",\n  \"room\": { \"roomID\": \"BAL\", \"numRooms\": 1 }\n}" },
+                "url": "{{TOURS_URL}}/bookings"
+              }
+            },
+            {
+              "name": "Get Booking",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));", "pm.test('bookingID matches', () => pm.expect(pm.response.json().bookingID).to.eql(pm.collectionVariables.get('tours_booking_id')));"], "type": "text/javascript" } }],
+              "request": { "method": "GET", "url": "{{TOURS_URL}}/bookings/{{tours_booking_id}}" }
+            },
+            {
+              "name": "Update Booking (Upgrade Room)",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));", "pm.test('room upgraded', () => pm.expect(pm.response.json().room.roomID).to.eql('STE'));"], "type": "text/javascript" } }],
+              "request": {
+                "method": "PUT",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": { "mode": "raw", "raw": "{\n  \"room\": { \"roomID\": \"STE\", \"numRooms\": 1 }\n}" },
+                "url": "{{TOURS_URL}}/bookings/{{tours_booking_id}}"
+              }
+            },
+            {
+              "name": "Delete Booking",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));", "pm.test('message correct', () => pm.expect(pm.response.json().message).to.include('deleted'));"], "type": "text/javascript" } }],
+              "request": { "method": "DELETE", "url": "{{TOURS_URL}}/bookings/{{tours_booking_id}}" }
+            },
+            {
+              "name": "Delete Customer (Cleanup)",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));"], "type": "text/javascript" } }],
+              "request": { "method": "DELETE", "url": "{{TOURS_URL}}/customers/postman_test@tours.com" }
+            },
+            {
+              "name": "404 — Booking Not Found",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 404', () => pm.response.to.have.status(404));"], "type": "text/javascript" } }],
+              "request": { "method": "GET", "url": "{{TOURS_URL}}/bookings/9999" }
+            },
+            {
+              "name": "400 — Missing Required Fields",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 400', () => pm.response.to.have.status(400));"], "type": "text/javascript" } }],
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": { "mode": "raw", "raw": "{\n  \"cruiseID\": \"CRUISE-001\"\n}" },
+                "url": "{{TOURS_URL}}/bookings"
+              }
+            }
+          ]
+        }
+
+      ]
+    },
+
+    {
+      "name": "🔷 API 4 — Tours GraphQL API (Apollo Server v4)",
+      "description": "Tours GraphQL API — Apollo Server v4 + Express\nPOST http://localhost:4000/graphql\n\nGraphQL의 핵심 기능을 시연합니다:\n- Query: 단일/목록 조회, 필터, 페이지네이션\n- Mutation: 생성/수정/삭제, 비즈니스 규칙 검증\n- Type resolver: 관계 데이터 자동 조인 (Cruise ↔ Booking ↔ Customer)\n- Custom Scalars: Date, DateTime, EmailAddress",
+      "item": [
+        {
+          "name": "System",
+          "item": [
+            {
+              "name": "Health Check",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));", "pm.test('status ok', () => pm.expect(pm.response.json().status).to.eql('ok'));"], "type": "text/javascript" } }],
+              "request": { "method": "GET", "url": "{{GRAPHQL_URL}}/health" }
+            }
+          ]
+        },
+        {
+          "name": "Queries",
+          "item": [
+            {
+              "name": "cruises — 전체 목록",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));", "pm.test('total is 3', () => pm.expect(pm.response.json().data.cruises.total).to.eql(3));"], "type": "text/javascript" } }],
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": { "mode": "raw", "raw": "{\"query\":\"{ cruises { total items { cruiseID title startDate numDays bookingCount } } }\"}" },
+                "url": "{{GRAPHQL_URL}}/graphql"
+              }
+            },
+            {
+              "name": "cruise — 단건 조회 (CRUISE-001)",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));", "pm.test('title matches', () => pm.expect(pm.response.json().data.cruise.title).to.eql('Mediterranean Discovery'));"], "type": "text/javascript" } }],
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": { "mode": "raw", "raw": "{\"query\":\"{ cruise(cruiseID: \\\"CRUISE-001\\\") { cruiseID title startDate endDate startPort numDays roomTypes { roomID name pricePerNight } bookingCount } }\"}" },
+                "url": "{{GRAPHQL_URL}}/graphql"
+              }
+            },
+            {
+              "name": "customers — 전체 목록",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));", "pm.test('total is 3', () => pm.expect(pm.response.json().data.customers.total).to.eql(3));"], "type": "text/javascript" } }],
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": { "mode": "raw", "raw": "{\"query\":\"{ customers { total items { emailAddress fullName bookingCount } } }\"}" },
+                "url": "{{GRAPHQL_URL}}/graphql"
+              }
+            },
+            {
+              "name": "customer — alice 상세 + 예약 목록 (관계 자동 조인)",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));", "pm.test('fullName is Alice Smith', () => pm.expect(pm.response.json().data.customer.fullName).to.eql('Alice Smith'));", "pm.test('has bookings', () => pm.expect(pm.response.json().data.customer.bookings.length).to.be.above(0));"], "type": "text/javascript" } }],
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": { "mode": "raw", "raw": "{\"query\":\"{ customer(emailAddress: \\\"alice@tours.com\\\") { emailAddress fullName phone bookingCount bookings { bookingID status cruise { title startDate } room { roomID details { pricePerNight } } } } }\"}" },
+                "url": "{{GRAPHQL_URL}}/graphql"
+              }
+            },
+            {
+              "name": "booking — 단건 조회 (1001, 전체 관계)",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));", "pm.test('cruise title loaded', () => pm.expect(pm.response.json().data.booking.cruise.title).to.eql('Mediterranean Discovery'));", "pm.test('customer fullName loaded', () => pm.expect(pm.response.json().data.booking.customer.fullName).to.eql('Alice Smith'));", "pm.test('room details loaded', () => pm.expect(pm.response.json().data.booking.room.details.pricePerNight).to.eql(220));"], "type": "text/javascript" } }],
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": { "mode": "raw", "raw": "{\"query\":\"{ booking(bookingID: \\\"1001\\\") { bookingID status cruise { title startDate } customer { fullName phone } room { roomID numRooms details { name pricePerNight currency } } numPassengers bookedAt } }\"}" },
+                "url": "{{GRAPHQL_URL}}/graphql"
+              }
+            },
+            {
+              "name": "cruises — 필터 (startPort=Barcelona)",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));", "pm.test('only Barcelona', () => pm.response.json().data.cruises.items.forEach(c => pm.expect(c.startPort).to.include('Barcelona')));"], "type": "text/javascript" } }],
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": { "mode": "raw", "raw": "{\"query\":\"{ cruises(filter: { startPort: \\\"Barcelona\\\" }) { total items { cruiseID title startPort } } }\"}" },
+                "url": "{{GRAPHQL_URL}}/graphql"
+              }
+            },
+            {
+              "name": "bookings — 필터 (status=CONFIRMED)",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));", "pm.test('all CONFIRMED', () => pm.response.json().data.bookings.items.forEach(b => pm.expect(b.status).to.eql('CONFIRMED')));"], "type": "text/javascript" } }],
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": { "mode": "raw", "raw": "{\"query\":\"{ bookings(filter: { status: CONFIRMED }) { total items { bookingID status cruise { title } customer { fullName } } } }\"}" },
+                "url": "{{GRAPHQL_URL}}/graphql"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Mutations",
+          "item": [
+            {
+              "name": "createCustomer",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                      "const d = pm.response.json().data.createCustomer;",
+                      "pm.test('success true', () => pm.expect(d.success).to.be.true);",
+                      "pm.collectionVariables.set('gql_customer_email', d.customer.emailAddress);"
+                    ],
+                    "type": "text/javascript"
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": { "mode": "raw", "raw": "{\"query\":\"mutation { createCustomer(input: { emailAddress: \\\"postman_gql@tours.com\\\", firstName: \\\"Postman\\\", lastName: \\\"GraphQL\\\", phone: \\\"+1-555-0199\\\", address: { street: \\\"1 Test St\\\", city: \\\"Austin\\\", state: \\\"TX\\\", postalCode: \\\"78701\\\", country: \\\"USA\\\" } }) { success message customer { emailAddress fullName createdAt } } }\"}" },
+                "url": "{{GRAPHQL_URL}}/graphql"
+              }
+            },
+            {
+              "name": "createBooking",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                      "const d = pm.response.json().data.createBooking;",
+                      "pm.test('success true', () => pm.expect(d.success).to.be.true);",
+                      "pm.collectionVariables.set('gql_booking_id', d.booking.bookingID);"
+                    ],
+                    "type": "text/javascript"
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": { "mode": "raw", "raw": "{\"query\":\"mutation { createBooking(input: { cruiseID: \\\"CRUISE-002\\\", customerID: \\\"postman_gql@tours.com\\\", room: { roomID: BAL, numRooms: 1 }, numPassengers: 2 }) { success message booking { bookingID status cruise { title } room { details { pricePerNight } } } } }\"}" },
+                "url": "{{GRAPHQL_URL}}/graphql"
+              }
+            },
+            {
+              "name": "updateBooking — numPassengers 변경",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));", "pm.test('numPassengers updated', () => pm.expect(pm.response.json().data.updateBooking.booking.numPassengers).to.eql(3));"], "type": "text/javascript" } }],
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": { "mode": "raw", "raw": "{\"query\":\"mutation { updateBooking(bookingID: \\\"{{gql_booking_id}}\\\", input: { numPassengers: 3 }) { success booking { bookingID numPassengers updatedAt } } }\"}" },
+                "url": "{{GRAPHQL_URL}}/graphql"
+              }
+            },
+            {
+              "name": "deleteBooking",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));", "pm.test('success true', () => pm.expect(pm.response.json().data.deleteBooking.success).to.be.true);"], "type": "text/javascript" } }],
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": { "mode": "raw", "raw": "{\"query\":\"mutation { deleteBooking(bookingID: \\\"{{gql_booking_id}}\\\") { success message deletedId } }\"}" },
+                "url": "{{GRAPHQL_URL}}/graphql"
+              }
+            },
+            {
+              "name": "deleteCustomer (Cleanup)",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));", "pm.test('success true', () => pm.expect(pm.response.json().data.deleteCustomer.success).to.be.true);"], "type": "text/javascript" } }],
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": { "mode": "raw", "raw": "{\"query\":\"mutation { deleteCustomer(emailAddress: \\\"postman_gql@tours.com\\\") { success message deletedId } }\"}" },
+                "url": "{{GRAPHQL_URL}}/graphql"
+              }
+            }
+          ]
+        },
+        {
+          "name": "에러 케이스",
+          "item": [
+            {
+              "name": "존재하지 않는 크루즈로 예약 — success:false",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));", "pm.test('success false', () => pm.expect(pm.response.json().data.createBooking.success).to.be.false);"], "type": "text/javascript" } }],
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": { "mode": "raw", "raw": "{\"query\":\"mutation { createBooking(input: { cruiseID: \\\"CRUISE-999\\\", customerID: \\\"alice@tours.com\\\", room: { roomID: INT, numRooms: 1 }, numPassengers: 1 }) { success message } }\"}" },
+                "url": "{{GRAPHQL_URL}}/graphql"
+              }
+            },
+            {
+              "name": "활성 예약 있는 고객 삭제 — success:false",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));", "pm.test('success false', () => pm.expect(pm.response.json().data.deleteCustomer.success).to.be.false);"], "type": "text/javascript" } }],
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": { "mode": "raw", "raw": "{\"query\":\"mutation { deleteCustomer(emailAddress: \\\"alice@tours.com\\\") { success message } }\"}" },
+                "url": "{{GRAPHQL_URL}}/graphql"
+              }
+            },
+            {
+              "name": "잘못된 쿼리 — GraphQL 문법 오류",
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status 400', () => pm.response.to.have.status(400));"], "type": "text/javascript" } }],
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": { "mode": "raw", "raw": "{\"query\":\"{ invalidField }\"}" },
+                "url": "{{GRAPHQL_URL}}/graphql"
+              }
+            }
+          ]
+        }
+      ]
+    }
+
+  ]
+}

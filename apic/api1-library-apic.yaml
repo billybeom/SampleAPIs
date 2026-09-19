@@ -1,0 +1,235 @@
+# =============================================================================
+# IBM API Connect — Library API Assembly
+#
+# API 1: Library Management API (인증 없음, 직관적 CRUD)
+# 대상 백엔드: http://library-api:3000
+#
+# 정책 흐름:
+#   1. set-variable : 요청 메타정보 헤더 추가
+#   2. invoke       : 백엔드 API 호출
+# =============================================================================
+swagger: "2.0"
+info:
+  title: Library Management API
+  description: |
+    도서관 도서/대출 관리 REST API — IBM API Connect 샘플 (인증 없음)
+    
+    엔드포인트:
+      GET  /books          — 도서 목록 (페이지/필터)
+      GET  /books/{id}     — 단건 조회
+      POST /books          — 도서 등록
+      PUT  /books/{id}     — 전체 수정
+      PATCH /books/{id}    — 부분 수정
+      DELETE /books/{id}   — 삭제
+      GET  /loans          — 대출 목록
+      POST /loans          — 대출 등록
+      PATCH /loans/{id}/return — 반납
+  version: "1.0.0"
+  x-ibm-name: library-management-api
+basePath: /library/v1
+schemes:
+  - https
+consumes:
+  - application/json
+produces:
+  - application/json
+
+# ── Security 정책 없음 (공개 API) ──────────────────────────────────────────
+security: []
+securityDefinitions: {}
+
+# ── IBM API Connect 카탈로그 설정 ──────────────────────────────────────────
+x-ibm-configuration:
+  testable: true
+  enforced: true
+  phase: realized
+
+  # ── 사전/사후 처리 없이 곧바로 invoke ──────────────────────────────────
+  assembly:
+    execute:
+
+      # Step 1: 요청 식별 헤더 주입 (백엔드에서 API Connect 경유를 구분 가능)
+      - set-variable:
+          version: 2.0.0
+          title: Set Gateway Headers
+          actions:
+            - set: message.headers.X-API-Gateway
+              value: IBM-API-Connect
+              type: string
+            - set: message.headers.X-Request-ID
+              value: $(request.headers.x-request-id)
+              type: string
+            - set: message.headers.X-Forwarded-For
+              value: $(request.headers.x-forwarded-for)
+              type: string
+
+      # Step 2: 백엔드 호출
+      - invoke:
+          version: 2.2.0
+          title: Invoke Library Backend
+          # 환경별 백엔드 URL — API Connect Catalog Properties로 관리
+          target-url: $(target-url)$(request.path)$(request.search)
+          verb: keep                # 클라이언트 HTTP 메서드 유지
+          follow-redirects: false
+          timeout: 30
+          compression: false
+          output: message
+
+  # ── Catalog Properties (환경별 백엔드 URL 관리) ─────────────────────────
+  # API Connect 관리 콘솔 > 카탈로그 > 속성에서 재정의 가능
+  properties:
+    target-url:
+      value: http://library-api:3000
+      description: 백엔드 Library API URL
+      encoded: false
+
+  # ── CORS ────────────────────────────────────────────────────────────────
+  cors:
+    enabled: true
+
+paths:
+  /books:
+    get:
+      summary: 도서 목록 조회
+      operationId: listBooks
+      parameters:
+        - name: genre
+          in: query
+          type: string
+        - name: available
+          in: query
+          type: boolean
+        - name: page
+          in: query
+          type: integer
+          default: 1
+        - name: limit
+          in: query
+          type: integer
+          default: 10
+      responses:
+        "200":
+          description: 도서 목록
+
+    post:
+      summary: 도서 등록
+      operationId: createBook
+      parameters:
+        - in: body
+          name: body
+          schema:
+            $ref: "#/definitions/BookInput"
+      responses:
+        "201":
+          description: 등록된 도서
+
+  /books/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        type: string
+    get:
+      summary: 도서 단건 조회
+      operationId: getBook
+      responses:
+        "200":
+          description: 도서 정보
+        "404":
+          description: 도서를 찾을 수 없음
+    put:
+      summary: 도서 전체 수정
+      operationId: replaceBook
+      parameters:
+        - in: body
+          name: body
+          schema:
+            $ref: "#/definitions/BookInput"
+      responses:
+        "200":
+          description: 수정된 도서
+    patch:
+      summary: 도서 부분 수정
+      operationId: updateBook
+      parameters:
+        - in: body
+          name: body
+          schema:
+            $ref: "#/definitions/BookInput"
+      responses:
+        "200":
+          description: 수정된 도서
+    delete:
+      summary: 도서 삭제
+      operationId: deleteBook
+      responses:
+        "204":
+          description: 삭제 완료
+
+  /loans:
+    get:
+      summary: 대출 목록 조회
+      operationId: listLoans
+      parameters:
+        - name: status
+          in: query
+          type: string
+          enum: [active, returned]
+        - name: bookId
+          in: query
+          type: string
+      responses:
+        "200":
+          description: 대출 목록
+    post:
+      summary: 도서 대출
+      operationId: createLoan
+      parameters:
+        - in: body
+          name: body
+          schema:
+            $ref: "#/definitions/LoanInput"
+      responses:
+        "201":
+          description: 대출 정보
+
+  /loans/{id}/return:
+    patch:
+      summary: 도서 반납
+      operationId: returnLoan
+      parameters:
+        - name: id
+          in: path
+          required: true
+          type: string
+      responses:
+        "200":
+          description: 반납 완료
+
+definitions:
+  BookInput:
+    type: object
+    properties:
+      title:
+        type: string
+      author:
+        type: string
+      isbn:
+        type: string
+      genre:
+        type: string
+      publishedYear:
+        type: integer
+  LoanInput:
+    type: object
+    required:
+      - bookId
+      - borrowerName
+    properties:
+      bookId:
+        type: string
+      borrowerName:
+        type: string
+      dueDate:
+        type: string
+        format: date

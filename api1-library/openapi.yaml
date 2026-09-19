@@ -1,0 +1,1323 @@
+openapi: "3.0.3"
+
+info:
+  title: Library Management API
+  version: "1.0.0"
+  description: |
+    도서관 도서 및 대출을 관리하는 REST API입니다.
+    IBM API Connect 등록용 샘플로 설계되었으며, 인증 없이 사용 가능한
+    직관적인 CRUD 패턴을 시연합니다.
+
+    ## 주요 기능
+    - 도서 등록/조회/수정/삭제 (장르·저자·가용여부 필터, 페이징 지원)
+    - 도서 대출 신청 및 반납 처리
+    - 재고 자동 관리 (대출 시 감소, 반납 시 증가, stock=0 시 available=false 자동 전환)
+
+    ## 데이터 저장
+    In-memory 저장소를 사용하며, 서버 재시작 시 초기 데이터로 리셋됩니다.
+
+  contact:
+    name: IBM API Connect Sample
+    url: https://www.ibm.com/products/api-connect
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:3000
+    description: 로컬 개발 서버
+  - url: https://library-api.apps.your-cluster.example.com
+    description: OpenShift 배포 (Route)
+  - url: https://library-api.your-cluster.example.com
+    description: Kubernetes 배포 (Ingress)
+
+tags:
+  - name: Health
+    description: 서버 상태 확인
+  - name: Books
+    description: 도서 관리 (CRUD + 필터/페이징)
+  - name: Loans
+    description: 도서 대출 및 반납 관리
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Paths
+# ─────────────────────────────────────────────────────────────────────────────
+paths:
+
+  # ── Health ──────────────────────────────────────────────────────────────────
+  /:
+    get:
+      tags: [Health]
+      summary: API 정보 및 엔드포인트 목록
+      operationId: getApiInfo
+      description: API 버전, 설명, 사용 가능한 엔드포인트 목록을 반환합니다.
+      responses:
+        "200":
+          description: API 정보
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiInfo"
+              example:
+                name: Library Management API
+                version: 1.0.0
+                description: Sample REST API for IBM API Connect demonstration
+                endpoints:
+                  books:
+                    GET /books: List all books
+                    GET /books/:id: Get a single book by ID
+                    POST /books: Add a new book
+                    PUT /books/:id: Update a book (full)
+                    PATCH /books/:id: Update a book (partial)
+                    DELETE /books/:id: Delete a book
+                  loans:
+                    GET /loans: List all loan records
+                    GET /loans/:id: Get a single loan record
+                    POST /loans: Borrow a book
+                    PATCH /loans/:id/return: Return a borrowed book
+
+  /health:
+    get:
+      tags: [Health]
+      summary: 서버 상태 확인
+      operationId: getHealth
+      description: 서버가 정상 동작 중인지 확인합니다. 로드밸런서 헬스체크에 사용됩니다.
+      responses:
+        "200":
+          description: 서버 정상 동작 중
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+              example:
+                status: ok
+                timestamp: "2024-11-15T09:00:00.000Z"
+
+  # ── Books ────────────────────────────────────────────────────────────────────
+  /books:
+    get:
+      tags: [Books]
+      summary: 도서 목록 조회
+      operationId: listBooks
+      description: |
+        전체 도서 목록을 조회합니다. 다양한 필터와 페이징을 지원합니다.
+
+        **필터 조합 예시:**
+        - `?genre=Technology` — Technology 장르만
+        - `?available=true` — 대출 가능한 도서만
+        - `?author=Martin` — 저자명에 "Martin" 포함
+        - `?genre=Technology&available=true&page=1&limit=5` — 복합 조건
+      parameters:
+        - $ref: "#/components/parameters/QueryGenre"
+        - $ref: "#/components/parameters/QueryAvailable"
+        - $ref: "#/components/parameters/QueryAuthor"
+        - $ref: "#/components/parameters/QueryPage"
+        - $ref: "#/components/parameters/QueryLimit"
+      responses:
+        "200":
+          description: 도서 목록 (페이징 정보 포함)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BookListResponse"
+              examples:
+                allBooks:
+                  summary: 전체 목록 (기본)
+                  value:
+                    total: 5
+                    page: 1
+                    limit: 10
+                    totalPages: 1
+                    data:
+                      - id: b001
+                        title: Clean Code
+                        author: Robert C. Martin
+                        isbn: "978-0132350884"
+                        genre: Technology
+                        publishedYear: 2008
+                        available: true
+                        stock: 3
+                      - id: b002
+                        title: The Pragmatic Programmer
+                        author: "David Thomas, Andrew Hunt"
+                        isbn: "978-0135957059"
+                        genre: Technology
+                        publishedYear: 2019
+                        available: true
+                        stock: 2
+                      - id: b003
+                        title: Design Patterns
+                        author: Gang of Four
+                        isbn: "978-0201633610"
+                        genre: Technology
+                        publishedYear: 1994
+                        available: false
+                        stock: 0
+                technologyAvailable:
+                  summary: Technology 장르, 대출 가능만
+                  value:
+                    total: 2
+                    page: 1
+                    limit: 10
+                    totalPages: 1
+                    data:
+                      - id: b001
+                        title: Clean Code
+                        author: Robert C. Martin
+                        isbn: "978-0132350884"
+                        genre: Technology
+                        publishedYear: 2008
+                        available: true
+                        stock: 3
+                      - id: b002
+                        title: The Pragmatic Programmer
+                        author: "David Thomas, Andrew Hunt"
+                        isbn: "978-0135957059"
+                        genre: Technology
+                        publishedYear: 2019
+                        available: true
+                        stock: 2
+                paged:
+                  summary: 페이징 (limit=2, page=2)
+                  value:
+                    total: 5
+                    page: 2
+                    limit: 2
+                    totalPages: 3
+                    data:
+                      - id: b003
+                        title: Design Patterns
+                        author: Gang of Four
+                        isbn: "978-0201633610"
+                        genre: Technology
+                        publishedYear: 1994
+                        available: false
+                        stock: 0
+                      - id: b004
+                        title: Sapiens
+                        author: Yuval Noah Harari
+                        isbn: "978-0062316097"
+                        genre: History
+                        publishedYear: 2011
+                        available: true
+                        stock: 5
+
+    post:
+      tags: [Books]
+      summary: 도서 등록
+      operationId: createBook
+      description: |
+        새로운 도서를 등록합니다.
+
+        **필수 필드:** `title`, `author`, `isbn`
+        **선택 필드:** `genre` (기본값: `Uncategorized`), `publishedYear`, `stock` (기본값: `1`)
+
+        동일 ISBN이 이미 존재하는 경우 `409 Conflict`를 반환합니다.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BookCreateRequest"
+            examples:
+              fullFields:
+                summary: 모든 필드 포함
+                value:
+                  title: "Refactoring: Improving the Design of Existing Code"
+                  author: Martin Fowler
+                  isbn: "978-0134757599"
+                  genre: Technology
+                  publishedYear: 2018
+                  stock: 3
+              requiredOnly:
+                summary: 필수 필드만 (genre/year 생략)
+                value:
+                  title: The Art of War
+                  author: Sun Tzu
+                  isbn: "978-0195014761"
+              fiction:
+                summary: 소설 등록
+                value:
+                  title: "1984"
+                  author: George Orwell
+                  isbn: "978-0451524935"
+                  genre: Fiction
+                  publishedYear: 1949
+                  stock: 5
+      responses:
+        "201":
+          description: 도서 등록 성공
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Book"
+              examples:
+                created:
+                  summary: 등록 성공 응답
+                  value:
+                    id: ba3f2c1d
+                    title: "Refactoring: Improving the Design of Existing Code"
+                    author: Martin Fowler
+                    isbn: "978-0134757599"
+                    genre: Technology
+                    publishedYear: 2018
+                    available: true
+                    stock: 3
+                createdMinimal:
+                  summary: 필수 필드만 등록 시
+                  value:
+                    id: cb5d3e2f
+                    title: The Art of War
+                    author: Sun Tzu
+                    isbn: "978-0195014761"
+                    genre: Uncategorized
+                    publishedYear: null
+                    available: true
+                    stock: 1
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          description: ISBN 중복
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorIsbnConflict"
+              example:
+                error: A book with this ISBN already exists
+                isbn: "978-0134757599"
+
+  /books/{bookId}:
+    parameters:
+      - $ref: "#/components/parameters/PathBookId"
+
+    get:
+      tags: [Books]
+      summary: 도서 단건 조회
+      operationId: getBook
+      description: ID로 특정 도서의 상세 정보를 조회합니다.
+      responses:
+        "200":
+          description: 도서 상세 정보
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Book"
+              examples:
+                available:
+                  summary: 대출 가능한 도서
+                  value:
+                    id: b001
+                    title: Clean Code
+                    author: Robert C. Martin
+                    isbn: "978-0132350884"
+                    genre: Technology
+                    publishedYear: 2008
+                    available: true
+                    stock: 3
+                unavailable:
+                  summary: 대출 중인 도서 (stock=0)
+                  value:
+                    id: b003
+                    title: Design Patterns
+                    author: Gang of Four
+                    isbn: "978-0201633610"
+                    genre: Technology
+                    publishedYear: 1994
+                    available: false
+                    stock: 0
+        "404":
+          $ref: "#/components/responses/BookNotFound"
+
+    put:
+      tags: [Books]
+      summary: 도서 전체 수정
+      operationId: replaceBook
+      description: |
+        도서의 모든 필드를 교체합니다 (PUT semantics).
+        제공하지 않은 필드는 기존 값이 유지됩니다.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BookUpdateRequest"
+            example:
+              title: "Clean Code (개정판)"
+              author: Robert C. Martin
+              isbn: "978-0132350884"
+              genre: Technology
+              publishedYear: 2008
+              available: true
+              stock: 5
+      responses:
+        "200":
+          description: 수정된 도서 정보
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Book"
+              example:
+                id: b001
+                title: "Clean Code (개정판)"
+                author: Robert C. Martin
+                isbn: "978-0132350884"
+                genre: Technology
+                publishedYear: 2008
+                available: true
+                stock: 5
+        "404":
+          $ref: "#/components/responses/BookNotFound"
+
+    patch:
+      tags: [Books]
+      summary: 도서 부분 수정
+      operationId: updateBook
+      description: |
+        도서의 특정 필드만 업데이트합니다 (PATCH semantics).
+
+        **stock 자동 동기화:** `stock` 값을 변경하면 `available` 플래그가 자동으로 업데이트됩니다.
+        - `stock > 0` → `available: true`
+        - `stock = 0` → `available: false`
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BookPatchRequest"
+            examples:
+              increaseStock:
+                summary: 재고 증가
+                value:
+                  stock: 5
+              zeroStock:
+                summary: 재고 소진 (available 자동 false)
+                value:
+                  stock: 0
+              changeGenre:
+                summary: 장르 변경
+                value:
+                  genre: "Classic Fiction"
+              multipleFields:
+                summary: 복수 필드 변경
+                value:
+                  stock: 10
+                  genre: "Classic Fiction"
+      responses:
+        "200":
+          description: 수정된 도서 정보
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Book"
+              examples:
+                stockIncreased:
+                  summary: 재고 증가 후
+                  value:
+                    id: b002
+                    title: The Pragmatic Programmer
+                    author: "David Thomas, Andrew Hunt"
+                    isbn: "978-0135957059"
+                    genre: Technology
+                    publishedYear: 2019
+                    available: true
+                    stock: 5
+                stockZero:
+                  summary: 재고 소진 후 (available 자동 false)
+                  value:
+                    id: b004
+                    title: Sapiens
+                    author: Yuval Noah Harari
+                    isbn: "978-0062316097"
+                    genre: History
+                    publishedYear: 2011
+                    available: false
+                    stock: 0
+        "404":
+          $ref: "#/components/responses/BookNotFound"
+
+    delete:
+      tags: [Books]
+      summary: 도서 삭제
+      operationId: deleteBook
+      description: |
+        도서를 삭제합니다.
+
+        **주의:** 현재 대출 중인 도서(active loan 존재)는 삭제할 수 없습니다.
+        먼저 반납 처리 후 삭제하세요.
+      responses:
+        "200":
+          description: 삭제 성공
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BookDeleteResponse"
+              example:
+                message: Book deleted successfully
+                book:
+                  id: b005
+                  title: The Great Gatsby
+                  author: F. Scott Fitzgerald
+                  isbn: "978-0743273565"
+                  genre: Fiction
+                  publishedYear: 1925
+                  available: true
+                  stock: 4
+        "404":
+          $ref: "#/components/responses/BookNotFound"
+        "409":
+          description: 대출 중인 도서 삭제 불가
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorActiveLoans"
+              example:
+                error: Cannot delete book with active loans
+                activeLoans: 1
+
+  # ── Loans ────────────────────────────────────────────────────────────────────
+  /loans:
+    get:
+      tags: [Loans]
+      summary: 대출 목록 조회
+      operationId: listLoans
+      description: |
+        전체 대출 기록을 조회합니다. 상태 및 도서 ID로 필터링할 수 있습니다.
+      parameters:
+        - $ref: "#/components/parameters/QueryLoanStatus"
+        - $ref: "#/components/parameters/QueryLoanBookId"
+      responses:
+        "200":
+          description: 대출 목록
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoanListResponse"
+              examples:
+                allLoans:
+                  summary: 전체 대출 목록
+                  value:
+                    total: 1
+                    data:
+                      - id: l001
+                        bookId: b003
+                        borrowerName: Alice Kim
+                        borrowerEmail: alice@example.com
+                        loanDate: "2024-11-01"
+                        dueDate: "2024-11-15"
+                        returnDate: null
+                        status: active
+                activeOnly:
+                  summary: 활성 대출만 (?status=active)
+                  value:
+                    total: 1
+                    data:
+                      - id: l001
+                        bookId: b003
+                        borrowerName: Alice Kim
+                        borrowerEmail: alice@example.com
+                        loanDate: "2024-11-01"
+                        dueDate: "2024-11-15"
+                        returnDate: null
+                        status: active
+                returnedOnly:
+                  summary: 반납 완료만 (?status=returned)
+                  value:
+                    total: 0
+                    data: []
+
+    post:
+      tags: [Loans]
+      summary: 도서 대출 신청
+      operationId: createLoan
+      description: |
+        도서를 대출합니다.
+
+        **필수 필드:** `bookId`, `borrowerName`, `borrowerEmail`
+        **선택 필드:** `daysToLoan` (기본값: `14`)
+
+        대출 성공 시 해당 도서의 `stock` 이 1 감소하고, `stock=0` 이 되면 `available: false` 로 전환됩니다.
+
+        **실패 조건:**
+        - 도서를 찾을 수 없음 → `404`
+        - 재고 없음 (`stock=0` 또는 `available=false`) → `409`
+        - 필수 필드 누락 → `400`
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoanCreateRequest"
+            examples:
+              standard14Days:
+                summary: 기본 대출 (14일)
+                value:
+                  bookId: b001
+                  borrowerName: 홍길동
+                  borrowerEmail: hong@example.com
+                  daysToLoan: 14
+              short7Days:
+                summary: 단기 대출 (7일)
+                value:
+                  bookId: b002
+                  borrowerName: 김민지
+                  borrowerEmail: minji.kim@corp.com
+                  daysToLoan: 7
+              defaultDays:
+                summary: daysToLoan 생략 (기본 14일)
+                value:
+                  bookId: b004
+                  borrowerName: 이철수
+                  borrowerEmail: cs.lee@corp.com
+      responses:
+        "201":
+          description: 대출 성공
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoanCreateResponse"
+              examples:
+                success:
+                  summary: 대출 성공 (재고 2→1)
+                  value:
+                    loan:
+                      id: l8f3a2b1
+                      bookId: b001
+                      borrowerName: 홍길동
+                      borrowerEmail: hong@example.com
+                      loanDate: "2024-11-15"
+                      dueDate: "2024-11-29"
+                      returnDate: null
+                      status: active
+                    book:
+                      id: b001
+                      title: Clean Code
+                      available: true
+                      stock: 2
+                lastStock:
+                  summary: 마지막 재고 대출 (stock 1→0, available false)
+                  value:
+                    loan:
+                      id: lae5c4d3
+                      bookId: b002
+                      borrowerName: 이철수
+                      borrowerEmail: cs.lee@corp.com
+                      loanDate: "2024-11-15"
+                      dueDate: "2024-11-29"
+                      returnDate: null
+                      status: active
+                    book:
+                      id: b002
+                      title: The Pragmatic Programmer
+                      available: false
+                      stock: 0
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          description: 도서를 찾을 수 없음
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+              example:
+                error: Book not found
+        "409":
+          description: 재고 없음
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBookUnavailable"
+              example:
+                error: Book is not available for loan
+                bookId: b003
+
+  /loans/{loanId}:
+    parameters:
+      - $ref: "#/components/parameters/PathLoanId"
+
+    get:
+      tags: [Loans]
+      summary: 대출 단건 조회
+      operationId: getLoan
+      description: ID로 특정 대출 기록을 조회합니다.
+      responses:
+        "200":
+          description: 대출 상세 정보
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Loan"
+              examples:
+                active:
+                  summary: 대출 중
+                  value:
+                    id: l001
+                    bookId: b003
+                    borrowerName: Alice Kim
+                    borrowerEmail: alice@example.com
+                    loanDate: "2024-11-01"
+                    dueDate: "2024-11-15"
+                    returnDate: null
+                    status: active
+                returned:
+                  summary: 반납 완료
+                  value:
+                    id: l001
+                    bookId: b003
+                    borrowerName: Alice Kim
+                    borrowerEmail: alice@example.com
+                    loanDate: "2024-11-01"
+                    dueDate: "2024-11-15"
+                    returnDate: "2024-11-14"
+                    status: returned
+        "404":
+          $ref: "#/components/responses/LoanNotFound"
+
+  /loans/{loanId}/return:
+    parameters:
+      - $ref: "#/components/parameters/PathLoanId"
+
+    patch:
+      tags: [Loans]
+      summary: 도서 반납
+      operationId: returnLoan
+      description: |
+        대출 중인 도서를 반납합니다.
+
+        반납 성공 시:
+        - `loan.status` → `"returned"`
+        - `loan.returnDate` → 반납일 (오늘 날짜)
+        - 해당 도서의 `stock` +1, `available: true` 로 자동 전환
+
+        이미 반납된 대출에 재반납 시도 시 `409 Conflict`
+      responses:
+        "200":
+          description: 반납 성공
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoanReturnResponse"
+              example:
+                message: Book returned successfully
+                loan:
+                  id: l001
+                  bookId: b003
+                  borrowerName: Alice Kim
+                  borrowerEmail: alice@example.com
+                  loanDate: "2024-11-01"
+                  dueDate: "2024-11-15"
+                  returnDate: "2024-11-14"
+                  status: returned
+        "404":
+          $ref: "#/components/responses/LoanNotFound"
+        "409":
+          description: 이미 반납된 대출
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+              example:
+                error: Book already returned
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Components
+# ─────────────────────────────────────────────────────────────────────────────
+components:
+
+  # ── Schemas ──────────────────────────────────────────────────────────────────
+  schemas:
+
+    Book:
+      type: object
+      description: 도서 정보
+      required:
+        - id
+        - title
+        - author
+        - isbn
+        - genre
+        - available
+        - stock
+      properties:
+        id:
+          type: string
+          description: 도서 고유 ID (서버 자동 생성)
+          example: b001
+          readOnly: true
+        title:
+          type: string
+          description: 도서 제목
+          minLength: 1
+          maxLength: 500
+          example: Clean Code
+        author:
+          type: string
+          description: 저자 (복수 저자는 쉼표로 구분)
+          minLength: 1
+          maxLength: 300
+          example: Robert C. Martin
+        isbn:
+          type: string
+          description: ISBN-13 형식 (하이픈 포함)
+          pattern: '^978-[0-9\-]{10,13}$'
+          example: "978-0132350884"
+        genre:
+          type: string
+          description: 장르 (미입력 시 Uncategorized)
+          example: Technology
+          default: Uncategorized
+        publishedYear:
+          type: integer
+          description: 출판 연도
+          minimum: 1000
+          maximum: 2100
+          nullable: true
+          example: 2008
+        available:
+          type: boolean
+          description: 대출 가능 여부 (stock > 0 이면 true)
+          example: true
+          readOnly: true
+        stock:
+          type: integer
+          description: 현재 대출 가능 재고 수량
+          minimum: 0
+          example: 3
+
+    BookCreateRequest:
+      type: object
+      description: 도서 등록 요청
+      required:
+        - title
+        - author
+        - isbn
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 500
+          example: "Refactoring: Improving the Design of Existing Code"
+        author:
+          type: string
+          minLength: 1
+          maxLength: 300
+          example: Martin Fowler
+        isbn:
+          type: string
+          pattern: '^978-[0-9\-]{10,13}$'
+          example: "978-0134757599"
+        genre:
+          type: string
+          maxLength: 100
+          default: Uncategorized
+          example: Technology
+        publishedYear:
+          type: integer
+          minimum: 1000
+          maximum: 2100
+          nullable: true
+          example: 2018
+        stock:
+          type: integer
+          minimum: 0
+          default: 1
+          example: 3
+
+    BookUpdateRequest:
+      type: object
+      description: 도서 전체 수정 요청 (PUT)
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 500
+          example: "Clean Code (개정판)"
+        author:
+          type: string
+          minLength: 1
+          maxLength: 300
+          example: Robert C. Martin
+        isbn:
+          type: string
+          pattern: '^978-[0-9\-]{10,13}$'
+          example: "978-0132350884"
+        genre:
+          type: string
+          maxLength: 100
+          example: Technology
+        publishedYear:
+          type: integer
+          minimum: 1000
+          maximum: 2100
+          nullable: true
+          example: 2008
+        available:
+          type: boolean
+          example: true
+        stock:
+          type: integer
+          minimum: 0
+          example: 5
+
+    BookPatchRequest:
+      type: object
+      description: |
+        도서 부분 수정 요청 (PATCH). 수정할 필드만 포함합니다.
+        `stock` 변경 시 `available` 이 자동으로 동기화됩니다.
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 500
+          example: "Clean Code (개정판)"
+        author:
+          type: string
+          minLength: 1
+          maxLength: 300
+        isbn:
+          type: string
+          pattern: '^978-[0-9\-]{10,13}$'
+        genre:
+          type: string
+          maxLength: 100
+          example: "Classic Fiction"
+        publishedYear:
+          type: integer
+          minimum: 1000
+          maximum: 2100
+          nullable: true
+        available:
+          type: boolean
+        stock:
+          type: integer
+          minimum: 0
+          example: 5
+
+    BookDeleteResponse:
+      type: object
+      required:
+        - message
+        - book
+      properties:
+        message:
+          type: string
+          example: Book deleted successfully
+        book:
+          $ref: "#/components/schemas/Book"
+
+    BookListResponse:
+      type: object
+      description: 페이징을 포함한 도서 목록
+      required:
+        - total
+        - page
+        - limit
+        - totalPages
+        - data
+      properties:
+        total:
+          type: integer
+          description: 필터 조건에 맞는 전체 도서 수
+          example: 5
+        page:
+          type: integer
+          description: 현재 페이지 번호
+          minimum: 1
+          example: 1
+        limit:
+          type: integer
+          description: 페이지당 결과 수
+          minimum: 1
+          maximum: 100
+          example: 10
+        totalPages:
+          type: integer
+          description: 전체 페이지 수
+          example: 1
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Book"
+
+    Loan:
+      type: object
+      description: 대출 기록
+      required:
+        - id
+        - bookId
+        - borrowerName
+        - borrowerEmail
+        - loanDate
+        - dueDate
+        - status
+      properties:
+        id:
+          type: string
+          description: 대출 고유 ID (서버 자동 생성)
+          example: l001
+          readOnly: true
+        bookId:
+          type: string
+          description: 대출한 도서의 ID
+          example: b003
+        borrowerName:
+          type: string
+          description: 대출자 이름
+          minLength: 1
+          maxLength: 100
+          example: Alice Kim
+        borrowerEmail:
+          type: string
+          format: email
+          description: 대출자 이메일
+          example: alice@example.com
+        loanDate:
+          type: string
+          format: date
+          description: 대출일 (YYYY-MM-DD)
+          example: "2024-11-01"
+          readOnly: true
+        dueDate:
+          type: string
+          format: date
+          description: 반납 예정일 (YYYY-MM-DD, 대출일 + daysToLoan)
+          example: "2024-11-15"
+          readOnly: true
+        returnDate:
+          type: string
+          format: date
+          description: 실제 반납일 (반납 전은 null)
+          nullable: true
+          example: null
+        status:
+          type: string
+          description: 대출 상태
+          enum:
+            - active
+            - returned
+          example: active
+
+    LoanCreateRequest:
+      type: object
+      description: 도서 대출 신청 요청
+      required:
+        - bookId
+        - borrowerName
+        - borrowerEmail
+      properties:
+        bookId:
+          type: string
+          description: 대출할 도서의 ID
+          example: b001
+        borrowerName:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: 대출자 이름
+          example: 홍길동
+        borrowerEmail:
+          type: string
+          format: email
+          description: 대출자 이메일
+          example: hong@example.com
+        daysToLoan:
+          type: integer
+          description: 대출 기간 (일)
+          minimum: 1
+          maximum: 90
+          default: 14
+          example: 14
+
+    LoanCreateResponse:
+      type: object
+      description: 대출 신청 성공 응답 (생성된 대출 정보 + 변경된 도서 재고 정보 포함)
+      required:
+        - loan
+        - book
+      properties:
+        loan:
+          $ref: "#/components/schemas/Loan"
+        book:
+          type: object
+          description: 대출 후 갱신된 도서 재고 정보
+          required:
+            - id
+            - title
+            - available
+            - stock
+          properties:
+            id:
+              type: string
+              example: b001
+            title:
+              type: string
+              example: Clean Code
+            available:
+              type: boolean
+              example: true
+            stock:
+              type: integer
+              example: 2
+
+    LoanListResponse:
+      type: object
+      required:
+        - total
+        - data
+      properties:
+        total:
+          type: integer
+          description: 조건에 맞는 전체 대출 건수
+          example: 1
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Loan"
+
+    LoanReturnResponse:
+      type: object
+      required:
+        - message
+        - loan
+      properties:
+        message:
+          type: string
+          example: Book returned successfully
+        loan:
+          $ref: "#/components/schemas/Loan"
+
+    HealthResponse:
+      type: object
+      required:
+        - status
+        - timestamp
+      properties:
+        status:
+          type: string
+          enum: [ok]
+          example: ok
+        timestamp:
+          type: string
+          format: date-time
+          example: "2024-11-15T09:00:00.000Z"
+
+    ApiInfo:
+      type: object
+      properties:
+        name:
+          type: string
+          example: Library Management API
+        version:
+          type: string
+          example: "1.0.0"
+        description:
+          type: string
+        endpoints:
+          type: object
+          additionalProperties:
+            type: object
+            additionalProperties:
+              type: string
+
+    ErrorMessage:
+      type: object
+      description: 단순 에러 메시지
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: 에러 내용
+          example: Book not found
+
+    ErrorIdMessage:
+      type: object
+      description: 에러 메시지 + ID
+      required:
+        - error
+        - id
+      properties:
+        error:
+          type: string
+          example: Book not found
+        id:
+          type: string
+          example: b999
+
+    ErrorIsbnConflict:
+      type: object
+      required:
+        - error
+        - isbn
+      properties:
+        error:
+          type: string
+          example: A book with this ISBN already exists
+        isbn:
+          type: string
+          example: "978-0134757599"
+
+    ErrorActiveLoans:
+      type: object
+      required:
+        - error
+        - activeLoans
+      properties:
+        error:
+          type: string
+          example: Cannot delete book with active loans
+        activeLoans:
+          type: integer
+          description: 현재 활성 대출 건수
+          example: 1
+
+    ErrorBookUnavailable:
+      type: object
+      required:
+        - error
+        - bookId
+      properties:
+        error:
+          type: string
+          example: Book is not available for loan
+        bookId:
+          type: string
+          example: b003
+
+  # ── Parameters ───────────────────────────────────────────────────────────────
+  parameters:
+
+    PathBookId:
+      name: bookId
+      in: path
+      required: true
+      description: 도서 고유 ID
+      schema:
+        type: string
+      example: b001
+
+    PathLoanId:
+      name: loanId
+      in: path
+      required: true
+      description: 대출 고유 ID
+      schema:
+        type: string
+      example: l001
+
+    QueryGenre:
+      name: genre
+      in: query
+      required: false
+      description: 장르로 필터링 (대소문자 무관)
+      schema:
+        type: string
+      examples:
+        technology:
+          value: Technology
+          summary: Technology 장르
+        fiction:
+          value: Fiction
+          summary: Fiction 장르
+        history:
+          value: History
+          summary: History 장르
+
+    QueryAvailable:
+      name: available
+      in: query
+      required: false
+      description: 대출 가능 여부로 필터링
+      schema:
+        type: string
+        enum: ["true", "false"]
+      example: "true"
+
+    QueryAuthor:
+      name: author
+      in: query
+      required: false
+      description: 저자명 부분 검색 (대소문자 무관)
+      schema:
+        type: string
+      example: Martin
+
+    QueryPage:
+      name: page
+      in: query
+      required: false
+      description: 페이지 번호 (1부터 시작)
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+      example: 1
+
+    QueryLimit:
+      name: limit
+      in: query
+      required: false
+      description: 페이지당 결과 수
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 10
+      example: 10
+
+    QueryLoanStatus:
+      name: status
+      in: query
+      required: false
+      description: 대출 상태로 필터링
+      schema:
+        type: string
+        enum:
+          - active
+          - returned
+      example: active
+
+    QueryLoanBookId:
+      name: bookId
+      in: query
+      required: false
+      description: 특정 도서의 대출 기록만 조회
+      schema:
+        type: string
+      example: b003
+
+  # ── Responses ─────────────────────────────────────────────────────────────────
+  responses:
+
+    BadRequest:
+      description: 잘못된 요청 (필수 필드 누락 또는 유효하지 않은 값)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorMessage"
+          examples:
+            missingBookFields:
+              summary: 도서 등록 필수 필드 누락
+              value:
+                error: "title, author, isbn are required fields"
+            missingLoanFields:
+              summary: 대출 신청 필수 필드 누락
+              value:
+                error: "bookId, borrowerName, borrowerEmail are required"
+
+    BookNotFound:
+      description: 도서를 찾을 수 없음
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorIdMessage"
+          example:
+            error: Book not found
+            id: b999
+
+    LoanNotFound:
+      description: 대출 기록을 찾을 수 없음
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorMessage"
+          example:
+            error: Loan not found

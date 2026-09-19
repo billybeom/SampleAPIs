@@ -1,0 +1,203 @@
+{
+  "realm": "corp",
+  "enabled": true,
+  "displayName": "Corp Realm",
+  "displayNameHtml": "<b>Corp</b> Sample Realm",
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": false,
+  "editUsernameAllowed": false,
+  "bruteForceProtected": false,
+  "accessTokenLifespan": 3600,
+  "accessTokenLifespanForImplicitFlow": 900,
+  "refreshTokenMaxReuse": 0,
+
+  "clients": [
+    {
+      "clientId": "salary-api",
+      "name": "Salary API Client",
+      "description": "API 2 — Salary Management API (Resource Server)",
+      "enabled": true,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "salary-api-secret",
+      "publicClient": false,
+      "bearerOnly": false,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "rootUrl": "http://localhost:8001",
+      "baseUrl": "/",
+      "redirectUris": ["http://localhost:8001/*"],
+      "webOrigins": ["*"],
+      "protocolMappers": [
+        {
+          "name": "department-mapper",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "userinfo.token.claim": "true",
+            "user.attribute": "department",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "department",
+            "jsonType.label": "String"
+          }
+        },
+        {
+          "name": "full-name-mapper",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-full-name-mapper",
+          "consentRequired": false,
+          "config": {
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ],
+      "defaultClientScopes": [
+        "web-origins",
+        "profile",
+        "roles",
+        "email"
+      ],
+      "optionalClientScopes": [
+        "address",
+        "phone",
+        "offline_access"
+      ]
+    },
+    {
+      "clientId": "postman-client",
+      "name": "Postman Test Client",
+      "description": "Postman / curl 테스트용 퍼블릭 클라이언트",
+      "enabled": true,
+      "publicClient": true,
+      "bearerOnly": false,
+      "directAccessGrantsEnabled": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "redirectUris": ["*"],
+      "webOrigins": ["*"]
+    }
+  ],
+
+  "roles": {
+    "realm": [
+      {
+        "name": "employee",
+        "description": "일반 직원 — 본인 연봉 조회/수정"
+      },
+      {
+        "name": "manager",
+        "description": "팀장 — 소속 팀 연봉 조회/수정"
+      },
+      {
+        "name": "hr_system",
+        "description": "HR 시스템 — 전체 연봉 조회/수정/삭제"
+      }
+    ]
+  },
+
+  "users": [
+    {
+      "username": "alice",
+      "email": "alice@corp.com",
+      "firstName": "Alice",
+      "lastName": "Kim",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "alice1234",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["employee"],
+      "attributes": {
+        "department": ["engineering"]
+      }
+    },
+    {
+      "username": "bob",
+      "email": "bob@corp.com",
+      "firstName": "Bob",
+      "lastName": "Lee",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "bob1234",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["employee"],
+      "attributes": {
+        "department": ["engineering"]
+      }
+    },
+    {
+      "username": "carol",
+      "email": "carol@corp.com",
+      "firstName": "Carol",
+      "lastName": "Park",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "carol1234",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["manager"],
+      "attributes": {
+        "department": ["engineering"]
+      }
+    },
+    {
+      "username": "dave",
+      "email": "dave@corp.com",
+      "firstName": "Dave",
+      "lastName": "Choi",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dave1234",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["employee"],
+      "attributes": {
+        "department": ["marketing"]
+      }
+    },
+    {
+      "username": "hr-system",
+      "email": "hr@corp.com",
+      "firstName": "HR",
+      "lastName": "System",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "hrsystem1234",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["hr_system"],
+      "attributes": {
+        "department": ["hr"]
+      }
+    }
+  ]
+}
