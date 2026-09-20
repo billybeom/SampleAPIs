@@ -37,6 +37,10 @@ tags:
     description: 도서 관리 (CRUD + 필터/페이징)
   - name: Loans
     description: 도서 대출 및 반납 관리
+  - name: Products
+    description: API 상품(Product) 관리 및 배포 흐름 (draft → review → published)
+  - name: Plans
+    description: 사용 정책(Plan) 관리 및 배포 흐름 (draft → review → published)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Paths
@@ -717,6 +721,499 @@ paths:
               example:
                 error: Book already returned
 
+  # ── Products ─────────────────────────────────────────────────────────────────
+  /products:
+    get:
+      tags: [Products]
+      summary: Product 목록 조회
+      operationId: listProducts
+      description: |
+        전체 Product 목록을 조회합니다.
+        상태, 공개 범위, 카테고리, 이름 검색 필터와 페이지네이션을 지원합니다.
+      parameters:
+        - name: status
+          in: query
+          description: "배포 상태 필터 (draft | review | published | rejected | deprecated)"
+          schema: { type: string, enum: [draft, review, published, rejected, deprecated] }
+        - name: visibility
+          in: query
+          description: "공개 범위 필터 (public | authenticated | custom)"
+          schema: { type: string, enum: [public, authenticated, custom] }
+        - name: category
+          in: query
+          description: 카테고리 부분 일치 검색
+          schema: { type: string }
+        - name: nameSearch
+          in: query
+          description: 이름/제목 부분 일치 검색
+          schema: { type: string }
+        - $ref: "#/components/parameters/QueryPage"
+        - $ref: "#/components/parameters/QueryLimit"
+      responses:
+        "200":
+          description: Product 목록
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProductListResponse" }
+    post:
+      tags: [Products]
+      summary: Product 생성
+      operationId: createProduct
+      description: |
+        새 Product를 **초안(draft)** 상태로 생성합니다.
+        배포하려면 `/products/{id}/submit` → `/products/{id}/publish` 흐름을 따르세요.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProductInput" }
+            example:
+              name: "odata-product"
+              title: "OData Catalog Product"
+              description: "제품 카탈로그 OData API 상품"
+              visibility: "public"
+              categories: ["catalog", "odata"]
+      responses:
+        "201":
+          description: 생성된 Product (draft 상태)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Product" }
+        "400":
+          description: 필수 필드 누락 또는 유효성 오류
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "409":
+          description: 동일 name의 Product가 이미 존재
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /products/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: Product ID (예 PROD-001)
+        schema: { type: string }
+    get:
+      tags: [Products]
+      summary: Product 단건 조회
+      operationId: getProduct
+      description: 특정 Product를 ID로 조회합니다. 연결된 Plan 목록도 함께 반환합니다.
+      responses:
+        "200":
+          description: Product 상세 (plans 포함)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProductDetail" }
+        "404":
+          description: Product를 찾을 수 없음
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+    put:
+      tags: [Products]
+      summary: Product 전체 수정
+      operationId: replaceProduct
+      description: Product를 전체 수정합니다. **draft** 또는 **rejected** 상태에서만 가능합니다.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProductInput" }
+      responses:
+        "200":
+          description: 수정된 Product
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Product" }
+        "404": { description: Product를 찾을 수 없음, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+        "409": { description: "수정 불가 상태 (published 등)", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+    patch:
+      tags: [Products]
+      summary: Product 부분 수정
+      operationId: updateProduct
+      description: Product를 부분 수정합니다. **draft** 또는 **rejected** 상태에서만 가능합니다.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProductPatchInput" }
+      responses:
+        "200":
+          description: 수정된 Product
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Product" }
+        "400": { description: 수정할 필드 없음, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+        "404": { description: Product를 찾을 수 없음, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+        "409": { description: "수정 불가 상태", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+    delete:
+      tags: [Products]
+      summary: Product 삭제
+      operationId: deleteProduct
+      description: |
+        Product를 삭제합니다. **draft** 또는 **rejected** 상태에서만 가능합니다.
+        연결된 Plan도 함께 삭제됩니다.
+      responses:
+        "200":
+          description: 삭제 완료
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProductDeleteResponse" }
+        "404": { description: Product를 찾을 수 없음, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+        "409": { description: "삭제 불가 상태", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+
+  /products/{id}/submit:
+    post:
+      tags: [Products]
+      summary: 검토 요청 (draft → review)
+      operationId: submitProductForReview
+      description: Product를 검토 요청 상태로 전환합니다. **draft** 상태에서만 가능합니다.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                note: { type: string, description: 검토 담당자에게 전달할 메모 }
+      responses:
+        "200":
+          description: 검토 요청 성공
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProductActionResponse" }
+        "404": { description: Product를 찾을 수 없음, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+        "409": { description: "상태 전이 불가", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+
+  /products/{id}/publish:
+    post:
+      tags: [Products]
+      summary: 게시/배포 (review → published)
+      operationId: publishProduct
+      description: Product를 게시(PUBLISHED) 상태로 배포합니다. **review** 상태에서만 가능합니다.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: 배포 성공
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProductActionResponse" }
+        "404": { description: Product를 찾을 수 없음, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+        "409": { description: "상태 전이 불가", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+
+  /products/{id}/reject:
+    post:
+      tags: [Products]
+      summary: 거절 (review → rejected)
+      operationId: rejectProduct
+      description: Product 검토를 거절합니다. **review** 상태에서만 가능합니다.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, description: 거절 사유 }
+      responses:
+        "200":
+          description: 거절 처리 성공
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProductActionResponse" }
+        "400": { description: 거절 사유 누락, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+        "404": { description: Product를 찾을 수 없음, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+        "409": { description: "상태 전이 불가", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+
+  /products/{id}/deprecate:
+    post:
+      tags: [Products]
+      summary: 사용 중단 (published → deprecated)
+      operationId: deprecateProduct
+      description: Product를 사용 중단 상태로 전환합니다. **published** 상태에서만 가능합니다.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: 사용 중단 처리 성공
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProductActionResponse" }
+        "404": { description: Product를 찾을 수 없음, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+        "409": { description: "상태 전이 불가", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+
+  /products/{id}/resubmit:
+    post:
+      tags: [Products]
+      summary: 재제출 (rejected → draft)
+      operationId: resubmitProduct
+      description: 거절된 Product를 초안 상태로 되돌립니다. **rejected** 상태에서만 가능합니다.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: 재제출 성공
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProductActionResponse" }
+        "404": { description: Product를 찾을 수 없음, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+        "409": { description: "상태 전이 불가", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+
+  # ── Plans ─────────────────────────────────────────────────────────────────────
+  /plans:
+    get:
+      tags: [Plans]
+      summary: Plan 목록 조회
+      operationId: listPlans
+      description: |
+        전체 Plan 목록을 조회합니다.
+        특정 Product, 상태, 무료 여부로 필터링할 수 있습니다.
+      parameters:
+        - name: productId
+          in: query
+          description: 특정 Product에 속한 Plan만 조회
+          schema: { type: string }
+        - name: status
+          in: query
+          description: "배포 상태 필터 (draft | review | published | rejected | deprecated)"
+          schema: { type: string, enum: [draft, review, published, rejected, deprecated] }
+        - name: freeOnly
+          in: query
+          description: 무료 플랜(price.amount=0)만 조회
+          schema: { type: boolean }
+        - $ref: "#/components/parameters/QueryPage"
+        - $ref: "#/components/parameters/QueryLimit"
+      responses:
+        "200":
+          description: Plan 목록
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PlanListResponse" }
+    post:
+      tags: [Plans]
+      summary: Plan 생성
+      operationId: createPlan
+      description: |
+        새 Plan을 **초안(draft)** 상태로 생성합니다.
+        `productId`로 지정한 Product가 존재해야 합니다.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PlanInput" }
+            example:
+              productId: "PROD-001"
+              name: "premium"
+              title: "프리미엄 플랜"
+              description: "무제한 호출, 전용 SLA"
+              rateLimit:
+                count: 10000
+                interval: 1
+                unit: "hour"
+              price:
+                amount: 99000
+                currency: "KRW"
+                billingPeriod: "monthly"
+              features: ["전체 API", "우선 지원"]
+              approvalRequired: false
+      responses:
+        "201":
+          description: 생성된 Plan (draft 상태)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Plan" }
+        "400":
+          description: 필수 필드 누락 또는 유효성 오류
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "404":
+          description: 연결할 Product를 찾을 수 없음
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "409":
+          description: 동일 name의 Plan이 같은 Product 내에 이미 존재
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /plans/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: Plan ID (예 PLAN-001)
+        schema: { type: string }
+    get:
+      tags: [Plans]
+      summary: Plan 단건 조회
+      operationId: getPlan
+      description: 특정 Plan을 ID로 조회합니다. 연결된 Product 정보도 함께 반환합니다.
+      responses:
+        "200":
+          description: Plan 상세 (product 포함)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PlanDetail" }
+        "404":
+          description: Plan을 찾을 수 없음
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+    put:
+      tags: [Plans]
+      summary: Plan 전체 수정
+      operationId: replacePlan
+      description: Plan을 전체 수정합니다. **draft** 또는 **rejected** 상태에서만 가능합니다.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PlanInput" }
+      responses:
+        "200": { description: 수정된 Plan, content: { application/json: { schema: { $ref: "#/components/schemas/Plan" } } } }
+        "404": { description: Plan을 찾을 수 없음, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+        "409": { description: "수정 불가 상태", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+    patch:
+      tags: [Plans]
+      summary: Plan 부분 수정
+      operationId: updatePlan
+      description: Plan을 부분 수정합니다. **draft** 또는 **rejected** 상태에서만 가능합니다.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PlanPatchInput" }
+      responses:
+        "200": { description: 수정된 Plan, content: { application/json: { schema: { $ref: "#/components/schemas/Plan" } } } }
+        "400": { description: 수정할 필드 없음, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+        "404": { description: Plan을 찾을 수 없음, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+        "409": { description: "수정 불가 상태", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+    delete:
+      tags: [Plans]
+      summary: Plan 삭제
+      operationId: deletePlan
+      description: Plan을 삭제합니다. **draft** 또는 **rejected** 상태에서만 가능합니다.
+      responses:
+        "200": { description: 삭제 완료, content: { application/json: { schema: { $ref: "#/components/schemas/PlanDeleteResponse" } } } }
+        "404": { description: Plan을 찾을 수 없음, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+        "409": { description: "삭제 불가 상태", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+
+  /plans/{id}/submit:
+    post:
+      tags: [Plans]
+      summary: 검토 요청 (draft → review)
+      operationId: submitPlanForReview
+      description: Plan을 검토 요청 상태로 전환합니다. **draft** 상태에서만 가능합니다.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: 검토 요청 성공, content: { application/json: { schema: { $ref: "#/components/schemas/PlanActionResponse" } } } }
+        "404": { description: Plan을 찾을 수 없음, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+        "409": { description: "상태 전이 불가", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+
+  /plans/{id}/publish:
+    post:
+      tags: [Plans]
+      summary: 게시/배포 (review → published)
+      operationId: publishPlan
+      description: Plan을 게시(PUBLISHED) 상태로 배포합니다. **review** 상태에서만 가능합니다.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: 배포 성공, content: { application/json: { schema: { $ref: "#/components/schemas/PlanActionResponse" } } } }
+        "404": { description: Plan을 찾을 수 없음, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+        "409": { description: "상태 전이 불가", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+
+  /plans/{id}/reject:
+    post:
+      tags: [Plans]
+      summary: 거절 (review → rejected)
+      operationId: rejectPlan
+      description: Plan 검토를 거절합니다. **review** 상태에서만 가능합니다.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, description: 거절 사유 }
+      responses:
+        "200": { description: 거절 처리 성공, content: { application/json: { schema: { $ref: "#/components/schemas/PlanActionResponse" } } } }
+        "400": { description: 거절 사유 누락, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+        "404": { description: Plan을 찾을 수 없음, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+        "409": { description: "상태 전이 불가", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+
+  /plans/{id}/deprecate:
+    post:
+      tags: [Plans]
+      summary: 사용 중단 (published → deprecated)
+      operationId: deprecatePlan
+      description: Plan을 사용 중단 상태로 전환합니다. **published** 상태에서만 가능합니다.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: 사용 중단 처리 성공, content: { application/json: { schema: { $ref: "#/components/schemas/PlanActionResponse" } } } }
+        "404": { description: Plan을 찾을 수 없음, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+        "409": { description: "상태 전이 불가", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+
+  /plans/{id}/resubmit:
+    post:
+      tags: [Plans]
+      summary: 재제출 (rejected → draft)
+      operationId: resubmitPlan
+      description: 거절된 Plan을 초안 상태로 되돌립니다. **rejected** 상태에서만 가능합니다.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: 재제출 성공, content: { application/json: { schema: { $ref: "#/components/schemas/PlanActionResponse" } } } }
+        "404": { description: Plan을 찾을 수 없음, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+        "409": { description: "상태 전이 불가", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Components
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1181,6 +1678,205 @@ components:
         bookId:
           type: string
           example: b003
+
+  # ── Product / Plan Schemas ───────────────────────────────────────────────────
+
+    # ── Product 스키마 ──────────────────────────────────────────────────────────
+    RateLimitPolicy:
+      type: object
+      description: Rate Limit 정책
+      required: [count, interval, unit]
+      properties:
+        count:    { type: integer, minimum: 1, description: 최대 호출 횟수 }
+        interval: { type: integer, minimum: 1, description: 시간 단위 값 }
+        unit:
+          type: string
+          enum: [second, minute, hour, day]
+          description: 시간 단위
+
+    PlanPrice:
+      type: object
+      description: Plan 가격 정보
+      required: [amount, currency]
+      properties:
+        amount:
+          type: number
+          minimum: 0
+          description: 요금 (0이면 무료)
+        currency:
+          type: string
+          description: "통화 코드 (KRW, USD 등)"
+        billingPeriod:
+          type: string
+          nullable: true
+          description: "청구 주기 (monthly | yearly | null=무료)"
+
+    Product:
+      type: object
+      description: API 상품(Product) 정보
+      properties:
+        id:              { type: string, description: "Product 고유 ID (예: PROD-001)" }
+        name:            { type: string, description: Product 이름 (URL-safe) }
+        title:           { type: string, description: Product 표시 이름 }
+        description:     { type: string, description: Product 설명 }
+        version:         { type: string, description: "버전 (SemVer)" }
+        status:
+          type: string
+          enum: [draft, review, published, rejected, deprecated]
+          description: 배포 상태
+        visibility:
+          type: string
+          enum: [public, authenticated, custom]
+          description: 공개 범위
+        categories:      { type: array, items: { type: string }, description: 카테고리 태그 목록 }
+        createdAt:       { type: string, format: date-time }
+        updatedAt:       { type: string, format: date-time }
+        publishedAt:     { type: string, format: date-time, nullable: true }
+        reviewNote:      { type: string, nullable: true, description: 검토 메모 }
+        rejectionReason: { type: string, nullable: true, description: 거절 사유 }
+
+    ProductDetail:
+      allOf:
+        - $ref: "#/components/schemas/Product"
+        - type: object
+          properties:
+            plans:      { type: array, items: { $ref: "#/components/schemas/Plan" } }
+            planCount:  { type: integer }
+
+    ProductInput:
+      type: object
+      description: Product 생성/수정 입력
+      required: [name, title, description]
+      properties:
+        name:        { type: string, description: "Product 이름 (URL-safe, 영문 소문자·하이픈)" }
+        title:       { type: string, description: Product 표시 이름 }
+        description: { type: string, description: Product 설명 }
+        version:     { type: string, default: "1.0.0" }
+        visibility:
+          type: string
+          enum: [public, authenticated, custom]
+          default: public
+        categories:  { type: array, items: { type: string } }
+
+    ProductPatchInput:
+      type: object
+      description: Product 부분 수정 입력 (하나 이상의 필드 필요)
+      properties:
+        title:       { type: string }
+        description: { type: string }
+        version:     { type: string }
+        visibility:
+          type: string
+          enum: [public, authenticated, custom]
+        categories:  { type: array, items: { type: string } }
+
+    ProductListResponse:
+      type: object
+      properties:
+        total:      { type: integer }
+        page:       { type: integer }
+        limit:      { type: integer }
+        totalPages: { type: integer }
+        data:       { type: array, items: { $ref: "#/components/schemas/Product" } }
+
+    ProductActionResponse:
+      type: object
+      properties:
+        message: { type: string }
+        product: { $ref: "#/components/schemas/Product" }
+
+    ProductDeleteResponse:
+      type: object
+      properties:
+        message:          { type: string }
+        deletedProduct:   { $ref: "#/components/schemas/Product" }
+        deletedPlanCount: { type: integer }
+
+    # ── Plan 스키마 ─────────────────────────────────────────────────────────────
+    Plan:
+      type: object
+      description: 사용 정책(Plan) 정보
+      properties:
+        id:               { type: string, description: "Plan 고유 ID (예: PLAN-001)" }
+        productId:        { type: string, description: 연결된 Product ID }
+        name:             { type: string, description: Plan 이름 (URL-safe) }
+        title:            { type: string, description: Plan 표시 이름 }
+        description:      { type: string, description: Plan 설명 }
+        rateLimit:        { $ref: "#/components/schemas/RateLimitPolicy" }
+        burstLimit:
+          $ref: "#/components/schemas/RateLimitPolicy"
+        price:            { $ref: "#/components/schemas/PlanPrice" }
+        features:         { type: array, items: { type: string }, description: 허용 기능 목록 }
+        status:
+          type: string
+          enum: [draft, review, published, rejected, deprecated]
+        approvalRequired: { type: boolean, description: 구독 시 관리자 승인 필요 여부 }
+        createdAt:        { type: string, format: date-time }
+        updatedAt:        { type: string, format: date-time }
+
+    PlanDetail:
+      allOf:
+        - $ref: "#/components/schemas/Plan"
+        - type: object
+          properties:
+            product: { $ref: "#/components/schemas/Product" }
+
+    PlanInput:
+      type: object
+      description: Plan 생성/수정 입력
+      required: [productId, name, title, description, rateLimit, price]
+      properties:
+        productId:        { type: string, description: 연결할 Product ID }
+        name:             { type: string, description: Plan 이름 (URL-safe) }
+        title:            { type: string }
+        description:      { type: string }
+        rateLimit:        { $ref: "#/components/schemas/RateLimitPolicy" }
+        burstLimit:
+          $ref: "#/components/schemas/RateLimitPolicy"
+        price:            { $ref: "#/components/schemas/PlanPrice" }
+        features:         { type: array, items: { type: string } }
+        approvalRequired: { type: boolean, default: false }
+
+    PlanPatchInput:
+      type: object
+      description: Plan 부분 수정 입력
+      properties:
+        title:            { type: string }
+        description:      { type: string }
+        rateLimit:        { $ref: "#/components/schemas/RateLimitPolicy" }
+        burstLimit:
+          $ref: "#/components/schemas/RateLimitPolicy"
+        price:            { $ref: "#/components/schemas/PlanPrice" }
+        features:         { type: array, items: { type: string } }
+        approvalRequired: { type: boolean }
+
+    PlanListResponse:
+      type: object
+      properties:
+        total:      { type: integer }
+        page:       { type: integer }
+        limit:      { type: integer }
+        totalPages: { type: integer }
+        data:       { type: array, items: { $ref: "#/components/schemas/Plan" } }
+
+    PlanActionResponse:
+      type: object
+      properties:
+        message: { type: string }
+        plan:    { $ref: "#/components/schemas/Plan" }
+
+    PlanDeleteResponse:
+      type: object
+      properties:
+        message:     { type: string }
+        deletedPlan: { $ref: "#/components/schemas/Plan" }
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:  { type: string, description: 에러 메시지 }
+        status: { type: string, nullable: true }
+        id:     { type: string, nullable: true }
 
   # ── Parameters ───────────────────────────────────────────────────────────────
   parameters:

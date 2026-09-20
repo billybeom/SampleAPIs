@@ -26,8 +26,10 @@ router.get("/", (req, res) => {
   }
 
   const total = result.length;
-  const pageNum = parseInt(page);
-  const limitNum = parseInt(limit);
+  let pageNum = parseInt(page, 10);
+  if (isNaN(pageNum) || pageNum < 1) pageNum = 1;
+  let limitNum = parseInt(limit, 10);
+  if (isNaN(limitNum) || limitNum < 1) limitNum = 10;
   const start = (pageNum - 1) * limitNum;
   const data = result.slice(start, start + limitNum);
 
@@ -35,7 +37,7 @@ router.get("/", (req, res) => {
     total,
     page: pageNum,
     limit: limitNum,
-    totalPages: Math.ceil(total / limitNum),
+    totalPages: Math.ceil(total / limitNum) || 1,
     data,
   });
 });

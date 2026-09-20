@@ -33,11 +33,15 @@ const typeDefs = fs.readFileSync(
 const resolvers = {
   Query,
   Mutation,
-  // Type resolvers & custom scalars
+  // Tours 도메인 타입 리졸버 & 커스텀 스칼라
   Cruise:       typeResolvers.Cruise,
   Customer:     typeResolvers.Customer,
   Booking:      typeResolvers.Booking,
   BookedRoom:   typeResolvers.BookedRoom,
+  // Product/Plan 카탈로그 타입 리졸버
+  Product:      typeResolvers.Product,
+  Plan:         typeResolvers.Plan,
+  // 커스텀 스칼라
   Date:         typeResolvers.Date,
   DateTime:     typeResolvers.DateTime,
   EmailAddress: typeResolvers.EmailAddress,

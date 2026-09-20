@@ -109,11 +109,51 @@ const EmailAddressScalar = new GraphQLScalarType({
   },
 });
 
+// ── Product 타입 리졸버 ─────────────────────────────────────────────────────
+
+const Product = {
+  /** 연결된 Plan 목록 조회 */
+  plans: (product) => store.getPlansByProduct(product.productID),
+
+  /** 연결된 Plan 수 (파생 필드) */
+  planCount: (product) => store.getPlansByProduct(product.productID).length,
+
+  /** 스토어의 status(소문자) → GraphQL enum(대문자) 변환 */
+  status: (product) => product.status ? product.status.toUpperCase() : "DRAFT",
+
+  /** 스토어의 visibility(소문자) → GraphQL enum(대문자) 변환 */
+  visibility: (product) => product.visibility ? product.visibility.toUpperCase() : "PUBLIC",
+};
+
+// ── Plan 타입 리졸버 ────────────────────────────────────────────────────────
+
+const Plan = {
+  /** 연결된 Product 객체 조회 */
+  product: (plan) => store.getProduct(plan.productID),
+
+  /** 스토어의 status(소문자) → GraphQL enum(대문자) 변환 */
+  status: (plan) => plan.status ? plan.status.toUpperCase() : "DRAFT",
+
+  /** rateLimit.unit 소문자 → 대문자 변환 */
+  rateLimit: (plan) =>
+    plan.rateLimit && plan.rateLimit.unit
+      ? { ...plan.rateLimit, unit: plan.rateLimit.unit.toUpperCase() }
+      : null,
+
+  /** burstLimit.unit 소문자 → 대문자 변환 (null 허용) */
+  burstLimit: (plan) =>
+    plan.burstLimit && plan.burstLimit.unit
+      ? { ...plan.burstLimit, unit: plan.burstLimit.unit.toUpperCase() }
+      : null,
+};
+
 module.exports = {
   Cruise,
   Customer,
   Booking,
   BookedRoom,
+  Product,
+  Plan,
   Date: DateScalar,
   DateTime: DateTimeScalar,
   EmailAddress: EmailAddressScalar,
