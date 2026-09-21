@@ -14,6 +14,13 @@ app.use(cors());
 app.use(express.json());
 app.use(morgan("dev"));
 
+// OData 4.0 Version Headers
+app.use((req, res, next) => {
+  res.setHeader("OData-Version", "4.0");
+  res.setHeader("OData-MaxVersion", "4.0");
+  next();
+});
+
 // ── OData service root ───────────────────────────────────────
 // Returns the OData service document (entity set listing)
 app.get("/", (req, res) => {

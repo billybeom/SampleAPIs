@@ -198,11 +198,30 @@ API Connect에서 OAuth2 정책을 추가하면 다음과 같이 역할을 구�
 
 ---
 
-## 스키마 레퍼런스
+## 스키마 레퍼런스 & GraphQL SDL 명세서
 
-전체 스키마 문서: [SCHEMA.md](./SCHEMA.md)  
-사용 예시: [EXAMPLES.md](./EXAMPLES.md)  
-GraphQL SDL: [src/schema/schema.graphql](./src/schema/schema.graphql)
+이 API의 핵심 명세는 GraphQL Schema Definition Language(SDL)로 정의되어 있습니다.
+
+- **SDL 명세서 파일 경로**: [`src/schema/schema.graphql`](./src/schema/schema.graphql)
+- **전체 스키마 상세 문서**: [SCHEMA.md](./SCHEMA.md)
+- **호출 쿼리/뮤테이션 예시**: [EXAMPLES.md](./EXAMPLES.md)
+
+### SDL 주요 구성 요소
+
+1. **Custom Scalars**: `Date` (ISO 8601 YYYY-MM-DD), `DateTime` (ISO 8601 UTC), `EmailAddress` (RFC 5322)
+2. **Core Types & Enums**:
+   - `Cruise`, `RoomType`, `Customer`, `Address`, `Booking`, `BookedRoom`
+   - `BookingStatus` (PENDING, CONFIRMED, CANCELLED, COMPLETED), `RoomTypeCode` (INT, BAL, STE), `Currency`, `SortDirection`
+3. **Product & Plan 카탈로그 관리**:
+   - `Product`, `Plan`, `RateLimitPolicy`, `PlanPrice`
+   - `CatalogStatus` (DRAFT, REVIEW, PUBLISHED, REJECTED, DEPRECATED), `ProductVisibility`, `RateLimitUnit`
+4. **Root Operations**:
+   - **Query**: `cruises`, `cruise`, `customers`, `customer`, `bookings`, `booking`, `products`, `product`, `plans`, `plan` (다중 필터 및 `PaginationInput` 지원)
+   - **Mutation**:
+     - 고객 관리: `createCustomer`, `updateCustomer`, `deleteCustomer`
+     - 예약 관리: `createBooking`, `updateBooking`, `deleteBooking`
+     - 카탈로그 수명주기: `createProduct`, `updateProduct`, `submitProductForReview`, `publishProduct`, `rejectProduct`, `deprecateProduct`, `deleteProduct` 및 Plan CRUD/배포
+   - **Subscription**: `bookingUpdated`, `cruiseBookingUpdated` (실시간 예약 이벤트)
 
 ---
 

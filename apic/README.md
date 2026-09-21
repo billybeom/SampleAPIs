@@ -13,9 +13,12 @@ apic/
 │
 ├── datapower/                    ← DataPower API Gateway 배포 파일
 │   ├── README.md
-│   ├── api1-datapower.yaml       ← Library API    (Swagger 2.0 + OAS 3.0)
-│   ├── api2-datapower.yaml       ← Salary API     (Swagger 2.0 + OAS 3.0)
-│   ├── api3-datapower.yaml       ← Tours API      (Swagger 2.0 + OAS 3.0)
+│   ├── api1-datapower-swagger2.0.yaml ← Library API (Swagger 2.0)
+│   ├── api1-datapower-oas3.0.yaml     ← Library API (OpenAPI 3.0)
+│   ├── api2-datapower-swagger2.0.yaml ← Salary API (Swagger 2.0)
+│   ├── api2-datapower-oas3.0.yaml     ← Salary API (OpenAPI 3.0)
+│   ├── api3-datapower-swagger2.0.yaml ← Tours API (Swagger 2.0)
+│   ├── api3-datapower-oas3.0.yaml     ← Tours API (OpenAPI 3.0)
 │   ├── api4-datapower.yaml       ← GraphQL API    (Swagger 2.0 + OAS 3.0)
 │   └── api5-datapower.yaml       ← OData API      (Swagger 2.0 + OAS 3.0)
 │
@@ -83,6 +86,34 @@ apic/
 | **캐싱** | (별도 정책) | `service-result-cache` | `Cache` |
 | **로깅** | Activity Log (설계 탭) | `log` 정책 | OpenTelemetry |
 | **변수 참조 문법** | `$(variable)` | `$(variable)` | JSONata: `$variable` |
+| **GraphQL SDL 직접 등록** | ✅ **완전 지원** (`graphql-execute`, `graphql-introspect` 등) | ✅ **지원** (v16.2 스펙, Query/Mutation 지원) | ❌ **미지원** (OpenAPI REST Pass-through만 가능) |
+| **OData 4.0 등록 방식** | ✅ **지원** (OpenAPI 3.0/3.1 REST Proxy로 등록) | ✅ **네이티브 지원** (EDMX `$metadata` 직접 임포트) | ✅ **지원** (OpenAPI 3.0/3.1 경량 REST Proxy로 등록) |
+
+---
+
+## Gateway별 프로토콜 지원 현황 (GraphQL & OData)
+
+### 1. GraphQL API 지원 현황
+- **IBM DataPower API Gateway (적극 권장)**:
+  - GraphQL SDL을 직접 임포트하여 프록시 생성 가능.
+  - 전용 정책 제공: `graphql-execute`(서브쿼리 분할 실행), `graphql-introspect`(로컬 인트로스펙션), `graphql-cost-analysis`(쿼리 비용 분석), `validate`(SDL 기반 페이로드 검증).
+  - 필드/타입 비용 기반의 정밀한 Rate Limiting 및 엔터프라이즈 보안 지원.
+- **webMethods API Gateway**:
+  - GraphQL SDL 파일 또는 URL 직접 임포트 지원 (GraphQL v16.2 준수).
+  - Query, Mutation 오퍼레이션 및 스키마 검증 지원 (Subscription 미지원).
+- **DataPower Nano Gateway**:
+  - GraphQL SDL 직접 임포트 및 전용 정책 미지원 (OpenAPI 3.0/3.1 REST 전용).
+  - `/graphql` 엔드포인트를 일반 REST POST/GET Pass-through로 구성하여 백엔드로 단순 중계 가능.
+
+### 2. OData 4.0 API 지원 현황
+- **webMethods API Gateway (네이티브 권장)**:
+  - OData V2 및 V4 1급(First-class) 지원.
+  - `GET /$metadata` 또는 EDMX XML을 직접 임포트하여 EntitySet, Singleton, Navigation Property 구조를 자동으로 시각화 및 정책 매핑.
+- **IBM DataPower API Gateway**:
+  - OData 엔드포인트를 기술한 `openapi.yaml`을 통해 REST API 프록시로 등록 및 관리.
+  - OData 시스템 쿼리 파라미터(`$filter`, `$select` 등)를 완벽하게 유효성 검증 및 GatewayScript/XSLT로 제어 가능.
+- **DataPower Nano Gateway**:
+  - `openapi.yaml` (OpenAPI 3.0/3.1) 기반의 초경량 REST 프록시로 등록하여 고성능 저지연 라우팅 제공.
 
 ---
 

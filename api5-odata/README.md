@@ -15,6 +15,9 @@
 | 인증 | 없음 (공개 API 시연용) |
 | 데이터 저장 | In-memory (재시작 시 초기화) |
 | OData 버전 | OData 4.0 |
+| CSDL 메타데이터 | `GET /$metadata` (EDMX 4.0 XML) |
+| 서비스 문서 | `GET /` (`application/json`) |
+| 표준 헤더 | `OData-Version: 4.0`, `OData-MaxVersion: 4.0` |
 
 ---
 
@@ -206,11 +209,32 @@ curl "http://localhost:3003/Products?\$top=3&\$skip=0&\$count=true"
 
 ---
 
+## OData 4.0 CSDL 메타데이터 및 명세서
+
+이 API는 OASIS OData 4.0 표준 프로토콜을 완벽하게 준수하며, 다음 두 가지 형식의 명세를 제공합니다.
+
+- **EDMX CSDL XML 메타데이터**: [`src/odata/metadata.js`](./src/odata/metadata.js) (`GET /$metadata`)
+- **OpenAPI 3.0.3 명세서**: [`openapi.yaml`](./openapi.yaml)
+
+### 메타데이터 구조 (EDMX 4.0)
+
+1. **Entity Types & Keys**:
+   - `Product` (Key: `id` [Edm.Int32]) — `name`, `price`, `stock`, `rating`, `categoryId`, `createdAt`, `discontinued`
+   - `Category` (Key: `id` [Edm.Int32]) — `name`, `description`
+2. **Navigation Properties & Constraints**:
+   - `Product.Category` ↔ `Category.Products` (1:N 양방향 관계, `categoryId` 외래키 제약조건)
+3. **Entity Container**:
+   - `DefaultContainer` 내 `Products`, `Categories` EntitySet 및 `Capabilities` 필터/정렬 어노테이션 정의
+
+---
+
 ## IBM API Connect 등록 가이드
 
 1. `GET /` 또는 `GET /health` 로 API 연결 확인
-2. `GET /$metadata` 로 OData 스키마 확인
-3. 포트 `3003` 으로 Catalog에 등록 (또는 환경변수 `PORT` 변경)
+2. `GET /$metadata` 로 OData CSDL XML 스키마 확인
+3. **Gateway 등록 방식**:
+   - **webMethods API Gateway**: 네이티브 OData 지원을 통해 `/$metadata` URL 또는 EDMX 파일 직접 임포트
+   - **DataPower API Gateway / Nano Gateway**: `openapi.yaml` 파일을 통해 REST 프록시 API로 등록 및 어셈블리 정책 연동
 4. `$` 가 포함된 OData 쿼리 파라미터는 URL 인코딩 필요: `%24filter`, `%24select` 등
 5. API Connect의 Assembly에서 `invoke` 정책으로 이 API를 백엔드로 연결 가능
 

@@ -4,15 +4,15 @@
 
 ## 파일 목록
 
-| 파일 | 백엔드 | 포트 | 인증 | basePath |
-|------|--------|------|------|----------|
-| `api1-datapower.yaml` | Library Management API | 3000 | 없음 | `/library/v1` |
-| `api2-datapower.yaml` | Salary Management API  | 8001 | Keycloak OAuth2 | `/salary/v2` |
-| `api3-datapower.yaml` | Tours Management API   | 3002 | 없음 | `/tours/v1` |
-| `api4-datapower.yaml` | GraphQL Product API    | 4000 | 없음 | `/graphql/v1` |
-| `api5-datapower.yaml` | OData Product Catalog  | 3003 | 없음 | `/odata/v1` |
+| 파일 (Swagger 2.0) | 파일 (OpenAPI 3.0) | 백엔드 | 포트 | 인증 | basePath |
+|-------------------|-------------------|--------|------|------|----------|
+| `api1-datapower-swagger2.0.yaml` | `api1-datapower-oas3.0.yaml` | Library Management API | 3000 | 없음 | `/library/v1` |
+| `api2-datapower-swagger2.0.yaml` | `api2-datapower-oas3.0.yaml` | Salary Management API  | 8001 | Keycloak OAuth2 | `/salary/v2` |
+| `api3-datapower-swagger2.0.yaml` | `api3-datapower-oas3.0.yaml` | Tours Management API   | 3002 | 없음 | `/tours/v1` |
+| `api4-datapower.yaml` | (동일 파일 내 수록) | GraphQL Product API    | 4000 | 없음 | `/graphql/v1` |
+| `api5-datapower.yaml` | (동일 파일 내 수록) | OData Product Catalog  | 3003 | 없음 | `/odata/v1` |
 
-각 파일은 **Swagger 2.0 명세**와 **OpenAPI 3.0 명세**를 함께 포함하여 두 버전을 비교할 수 있습니다.
+api1, api2, api3는 사용 목적에 따라 Swagger 2.0과 OpenAPI 3.0 파일로 각각 독립 분리되어 있습니다.
 
 ---
 
