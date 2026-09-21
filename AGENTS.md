@@ -4,7 +4,7 @@ This file provides guidance to agents when working with code in this repository.
 
 ## Repository Structure
 
-Four independent IBM API Connect sample APIs — each is a self-contained subdirectory with its own dependencies, Dockerfile, and deployment manifests:
+Five independent IBM API Connect sample APIs — each is a self-contained subdirectory with its own dependencies, Dockerfile, and deployment manifests:
 
 | Dir | Stack | Port |
 |-----|-------|------|
@@ -12,19 +12,20 @@ Four independent IBM API Connect sample APIs — each is a self-contained subdir
 | `api2-salary/` | Python 3.11 + FastAPI + Keycloak JWKS (RS256) | 8001 |
 | `api3-tours/` | Node.js 18 + Express 4, no auth | 3002 |
 | `api4-graphql/` | Node.js 18 + Apollo Server v4 + Express | 4000 |
+| `api5-odata/` | Node.js 18 + Express 4 (OData 4.0), no auth | 3003 |
 
 ## Commands
 
 All commands must be run from **inside the specific API subdirectory**, not the repo root.
 
-### api1-library / api3-tours / api4-graphql (Node.js)
+### Node.js APIs (`api1-library`, `api3-tours`, `api4-graphql`, `api5-odata`)
 ```bash
 npm install && npm start      # run server
 npm run dev                   # nodemon hot-reload
-npm test                      # api3/api4 only — uses Node.js built-in test runner (node --test test/)
+npm test                      # api4 only — uses Node.js built-in test runner (node --test test/)
 ```
 
-### api2-salary (Python/FastAPI)
+### Python/FastAPI (`api2-salary`)
 ```bash
 cd api2-salary
 python -m venv venv && source venv/bin/activate
@@ -37,56 +38,47 @@ pytest tests/ -v --tb=short
 # Run a single test file
 pytest tests/test_security.py -v
 
-# Run a single test
+# Run a single test method
 pytest tests/test_salary_routes.py::TestSalaryMeEndpoint::test_alice_can_view_own_salary -v
 
-# Lint
+# Lint & format
 pip install ruff
 ruff check app/ && ruff format app/ --check
 ```
 
 ### OpenAPI Lint (repo root)
 ```bash
-npm install -g @stoplight/spectral-cli
 spectral lint api1-library/openapi.yaml --ruleset .spectral.yaml --fail-severity error
 spectral lint api2-salary/openapi.yaml  --ruleset .spectral.yaml --fail-severity error
 spectral lint api3-tours/openapi.yaml   --ruleset .spectral.yaml --fail-severity error
+spectral lint api5-odata/openapi.yaml   --ruleset .spectral.yaml --fail-severity error
 ```
 
-## Critical Patterns
+## Critical Patterns & Non-Obvious Discoveries
 
-### api2-salary — Test mocking
-- Tests never hit a real Keycloak — they mock `app.auth.security.verify_keycloak_token` with an async function returning a fake payload dict directly.
-- `conftest.py` sets env vars (`KEYCLOAK_URL`, `KEYCLOAK_REALM`, `KEYCLOAK_AUDIENCE`) **before** importing `app.main` — this order is required because `security.py` reads env vars at import time.
-- The session-scoped `TestClient` means `TestSalaryDeleteEndpoint` tests mutate shared in-memory state — delete tests must target records not used by other test classes.
+### api2-salary (Python/FastAPI)
+- **Import-time env vars**: `security.py` reads `KEYCLOAK_URL`, `KEYCLOAK_REALM`, `KEYCLOAK_AUDIENCE` at **import time**. When writing tests or scripts, set env vars (`os.environ.setdefault`) **before** importing `app.main`.
+- **Test mocking**: Never hit Keycloak in tests. Mock `app.auth.security.verify_keycloak_token` with an `async def` function returning a fake payload dict.
+- **In-memory state mutation**: `SALARIES` in `app/data/store.py` is a module-level mutable list. Tests using session-scoped `TestClient` mutate shared state across test methods; deletion tests must target records unused by other tests.
+- **Identity & Roles**: `employee_id` maps to Keycloak's `sub` claim (e.g. `sub-alice-0001`), not numeric IDs. Role priority: `hr_system > manager > employee`.
+- **Empty payload handling**: `salaries.py` uses `payload.model_dump(exclude_none=True)` — empty body `{}` must return 400 (`Bad Request`), not silently succeed.
+- **Permission checks**: `assert_can_*` helpers raise `fastapi.HTTPException` directly — do not catch them in route handlers.
 
-### api2-salary — Data model
-- `SALARIES[].employee_id` maps to Keycloak's `sub` claim (not a numeric ID); test fixture subs are `sub-alice-0001` etc.
-- Role resolution merges `realm_access.roles` + `resource_access.<KEYCLOAK_AUDIENCE>.roles` — priority: `hr_system > manager > employee`.
-- `TOKEN_HEADER_NAME` env var controls which header is read for Bearer token; defaults to `Authorization` but APIC may deliver via a custom header.
+### api3-tours (Node.js/Express)
+- **Customer ID param**: `/customers/:id` uses **`emailAddress`** as the key param, not an integer or UUID.
 
-### api3-tours — Customer ID
-- `/customers/:id` path param is the **emailAddress** (not a numeric/UUID ID) — this is non-obvious from REST conventions.
+### api4-graphql (Node.js/Apollo Server)
+- **Schema loading**: SDL is loaded from `src/schema/schema.graphql` via `fs.readFileSync` at startup. Schema edits require process restart (no hot-reload).
+- **Introspection**: Apollo Sandbox is unconditionally enabled (`introspection: true`) regardless of `NODE_ENV`.
 
-### api4-graphql — Schema location
-- GraphQL SDL is read from disk at startup: `src/schema/schema.graphql`. Changes require server restart; no hot-reload of schema.
-- Apollo Sandbox is always enabled (`introspection: true`) regardless of `NODE_ENV`.
+### api5-odata (Node.js/Express)
+- **Route dual-matching**: Supports both OData canonical key syntax `GET /Products(1)` and REST style `GET /Products/1` via regex route paths `["/:key(\\d+)", "\\(:key(\\d+)\\)"]`.
+- **Error structure**: OData errors use nested OData 4.0 JSON specification format: `{ error: { code, message, target } }`.
 
-### All Node.js APIs — Data store
-- All data is in-memory; server restart resets to seed data. No database or persistence layer.
+### All Node.js APIs
+- **CommonJS only**: Use `require` / `module.exports` throughout (no ESM `import`/`export`).
+- **In-memory store**: All data stores are purely in-memory structures reset on process restart.
 
-## Code Style
-
-### Python (api2-salary)
-- Linter: **Ruff** (check + format). Run `ruff check app/` and `ruff format app/ --check`.
-- No type annotations on route handler arguments beyond FastAPI `Depends()` patterns; plain `dict` used for user/salary objects throughout.
-- Permission helpers (`assert_can_*`) raise `HTTPException` directly — no return values, no custom exception classes.
-
-### JavaScript (api1, api3, api4)
-- CommonJS (`require`/`module.exports`) throughout — no ESM.
-- Route files use `express.Router()` and are mounted in `src/index.js`.
-- Error responses always include an `error` string key; 404s also echo back the problematic identifier.
-
-### OpenAPI specs
-- All `openapi.yaml` files must pass `.spectral.yaml` rules: every operation needs `operationId` (error) and `summary` (warn).
-- `info-contact` and `info-license` are disabled in `.spectral.yaml` (sample APIs don't require them).
+### OpenAPI & Gateway Rules
+- **Spectral enforcement**: Every operation across all `openapi.yaml` specs requires `operationId` (error) and `summary` (warn).
+- **APIC Parameter Control**: For `api5-odata`, DataPower `invoke` policy must leave Parameter control without allowlist to pass OData system query options (`$filter`, `$select`, `$expand`, etc.) through.

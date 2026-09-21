@@ -196,46 +196,96 @@ npm start
 
 ---
 
-## IBM API Connect 등록 방법
+## IBM API Connect 등록, 구성 및 관리 가이드
 
-> **게이트웨이 타입 선택 기준 (버전 12.1.1 기준)**
-> - **DataPower API Gateway**: 기업 표준 게이트웨이. REST, SOAP, GraphQL API 지원. `invoke` 정책 버전 2.0.0 이상 사용.
-> - **DataPower Nano Gateway**: 클라우드 네이티브 경량 게이트웨이. OpenAPI 3.0 REST API 전용 (OpenAPI 2.0 미지원).
-> - **DataPower Gateway (v5 compatible)**: 레거시 호환 게이트웨이 (**deprecated** — 신규 배포에는 사용 금지).
+이 저장소의 5개 샘플 API는 IBM API Connect(DataPower API Gateway, webMethods API Gateway, DataPower Nano Gateway)에 맞춤형으로 등록하고 관리할 수 있도록 사전 구성된 명세서와 정책 파일(`apic/` 폴더)을 제공합니다.
 
-### 방법 1 — OpenAPI 명세서로 REST API Import
+---
 
-IBM API Connect 12.1.1에서 REST API를 등록하는 정식 경로는 **API Studio > Add an API > Create a REST API from an OpenAPI definition**입니다.
+### 1. 게이트웨이 유형 및 프로토콜 지원 기준 (12.1.x)
 
-| API | 명세서 파일 | Import 방법 |
-|-----|-----------|------------|
-| Library API | `api1-library/openapi.yaml` | API Studio > Add an API > From file (OpenAPI 3.0) |
-| Salary API | `api2-salary/openapi.yaml` | API Studio > Add an API > From file (OpenAPI 3.0) |
-| Tours REST API | `api3-tours/openapi.yaml` | API Studio > Add an API > From file (OpenAPI 3.0) |
-| Tours GraphQL API | `api4-graphql/src/schema/schema.graphql` | API Studio > Add an API > Create a GraphQL API |
-| OData Catalog API | `api5-odata/openapi.yaml` | API Studio > Add an API > From file (OpenAPI 3.0, REST API로 등록) |
+* **DataPower API Gateway**: 엔터프라이즈 표준 게이트웨이. REST, GraphQL(전용 정책 및 SDL 지원), OData(REST 프록시), SOAP 지원. Keycloak/OAuth2 연동 지원.
+* **webMethods API Gateway**: 하이브리드 통합 게이트웨이. REST, GraphQL(SDL 임포트), OData 4.0(EDMX 메타데이터 네이티브 지원).
+* **DataPower Nano Gateway**: 클라우드 네이티브 초경량 게이트웨이. OpenAPI 3.0/3.1 REST 전용 (GraphQL 및 OData는 일반 REST 프록시로 중계).
 
-### 방법 2 — APIC Assembly YAML로 Import (권장)
+---
 
-`apic/` 폴더의 파일은 **Assembly 정책이 포함된 완성형 API 정의**입니다.
+### 2. API 등록 방법
 
-> **참고:** `api5-odata`는 현재 `apic/` 폴더에 Assembly YAML이 제공되지 않습니다.
-> API Studio UI를 통해 방법 1로 등록한 후, Assembly 편집기에서 `invoke` 정책을 직접 추가하세요.
-> `invoke` 정책 설정 시 **Parameter control** 항목을 "Allowlist 없음(전체 통과)"으로 유지해야 `$filter`, `$expand` 등 OData 쿼리 파라미터가 백엔드로 정상 전달됩니다.
+상세한 스크린샷 가이드 및 단계별 설명은 [apic/APIC_API_등록_배포_가이드.md](apic/APIC_API_등록_배포_가이드.md)를 참조하세요.
 
-```bash
-# apic CLI 로그인
-apic login --server management.example.com --username admin
+#### 방법 A: 완성형 Assembly YAML로 일괄 등록 (권장)
+게이트웨이별 정책(`assembly`)이 포함된 사전 구성 YAML을 불러와 등록합니다.
 
-# API 정의 Publish
-apic publish apic/api1-library-apic.yaml --server management.example.com \
-  --organization my-org --catalog sandbox
+| Gateway 유형 | 추천 소스 경로 (`apic/`) | 특징 |
+|-------------|-------------------------|------|
+| **DataPower API Gateway** | `apic/datapower/api{1~5}-datapower-oas3.0.yaml` 또는 `api4/5-datapower.yaml` | Rate-limit, Target-url 변수, Keycloak JWT 검증, GraphQL Execute 포함 |
+| **webMethods API Gateway** | `apic/webmethods/api{1~5}-webmethods.yaml` | Request Transformation, Identify & Authorize 포함 |
+| **Nano Gateway** | `apic/nano/api{1~5}-nano.yaml` | PascalCase 정책, Cors, LuaScript, JSONata URL 지원 |
 
-apic publish apic/api2-salary-apic.yaml --server management.example.com \
-  --organization my-org --catalog sandbox
-```
+* **GUI(API Manager) 등록:** **Develop** → **Add** → **API** → **Existing OpenAPI** 선택 후 위 YAML 파일 업로드
+* **CLI(`apic`) 등록 및 게시:**
+  ```bash
+  # 1. 관리 서버 로그인
+  apic login --server <mgmt-server-url> --username <user> --password <pwd> --realm provider/default-idp-2
 
-→ 자세한 내용: [apic/README.md](apic/README.md)
+  # 2. API 초안(Draft) 생성
+  apic drafts:create apic/datapower/api1-datapower-oas3.0.yaml --server <mgmt-server-url> --org <my-org>
+
+  # 3. 카탈로그에 배포(Publish)
+  apic publish apic/datapower/api1-datapower-oas3.0.yaml --server <mgmt-server-url> --org <my-org> --catalog sandbox
+  ```
+
+#### 방법 B: 원본 OpenAPI / GraphQL 명세서로 직접 등록
+각 API 디렉토리의 표준 명세서 파일로부터 생성합니다.
+
+* **API 1 (Library):** `api1-library/openapi.yaml` (OpenAPI 3.0 REST)
+* **API 2 (Salary):** `api2-salary/openapi.yaml` (OpenAPI 3.0 REST + OAuth2 SecurityScheme)
+* **API 3 (Tours):** `api3-tours/openapi.yaml` (OpenAPI 3.0 REST)
+* **API 4 (GraphQL):** `api4-graphql/src/schema/schema.graphql` (GraphQL SDL 직접 임포트)
+* **API 5 (OData):** `api5-odata/openapi.yaml` (REST 프록시로 등록) 또는 `GET http://<backend>:3003/$metadata` (webMethods OData 임포트)
+
+---
+
+### 3. API 정책 구성 및 보안 설정
+
+1. **Assembly 정책 구성 (API Designer / Assembly 탭):**
+   * **`rate-limit`**: 플랜/클라이언트별 호출 빈도 제한
+   * **`set-variable`**: 백엔드 전달 전 헤더 주입(`X-API-Gateway` 등)
+   * **`invoke`**: 백엔드 서비스 호출 (`target-url` 변수 연동)
+   * *(OData 5번 API 필수)*: `invoke` 정책의 **Parameter Control**을 통과(Allowlist 미지정)로 설정하여 `$filter`, `$select`, `$expand` 등 시스템 쿼리가 손실되지 않도록 유지
+
+2. **인증 및 인가 (Keycloak 연동 - API 2 Salary):**
+   * Keycloak을 Third-Party OAuth Provider 또는 OIDC 레지스트리로 연동 (`apic/keycloak/` 참조)
+   * Assembly에서 `jwt-validate` / `oauth` 정책 또는 GatewayScript(`keycloak-rbac-policy.yaml`)를 통해 역할(`employee`, `manager`, `hr_system`) 검증
+
+---
+
+### 4. 카탈로그 환경 변수 관리 (Catalog Properties)
+
+개발(Dev), 스테이징(Staging), 운영(Prod) 환경별 백엔드 URL 분리는 **Catalog Settings > Properties**를 통해 코드 수정 없이 제어합니다.
+
+| Property 이름 | 설명 | 개발(Dev) 예시 | 운영(Prod) 예시 |
+|---------------|------|---------------|----------------|
+| `target-url` (Library) | API 1 백엔드 주소 | `http://library-api:3000` | `https://library.corp.com` |
+| `target-url` (Salary) | API 2 백엔드 주소 | `http://salary-api:8001` | `https://salary.corp.com` |
+| `keycloak-issuer` | Keycloak Issuer URL | `http://keycloak:8080/realms/corp` | `https://sso.corp.com/realms/corp` |
+| `target-url` (Tours) | API 3 백엔드 주소 | `http://tours-api:3002` | `https://tours.corp.com` |
+| `target-url` (GraphQL) | API 4 백엔드 주소 | `http://graphql-api:4000` | `https://graphql.corp.com` |
+| `target-url` (OData) | API 5 백엔드 주소 | `http://odata-api:3003` | `https://odata.corp.com` |
+
+---
+
+### 5. 제품(Product) 구성 및 라이프사이클 관리
+
+* **Product 패키징**: 하나 이상의 API(예: Tours REST + GraphQL, Library 등)를 묶어 **Plan**(요금제/호출 한도)을 정의
+* **라이프사이클 관리**:
+  * `Draft` → `Staged` (카탈로그 준비) → `Published` (개발자 포털 노출 및 서비스 개시)
+  * `Deprecated` (신규 구독 차단) → `Retired` (서비스 종료)
+* **Developer Portal 연동**: 개발자 포털을 통해 외부 개발자/사내 팀에 API 문서 자동 노출, Client ID 발급 및 구독 셀프서비스 제공
+
+→ 게이트웨이별 상세 비교 및 YAML 샘플: [apic/README.md](apic/README.md)
+→ Keycloak 상세 연동 구성: [apic/keycloak/README.md](apic/keycloak/README.md)
 
 ---
 
