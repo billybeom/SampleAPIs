@@ -1,6 +1,6 @@
 # IBM API Connect — Sample APIs
 
-네 개의 샘플 API를 제공합니다. 각 API는 IBM API Connect에 바로 등록할 수 있도록 설계되었습니다.
+다섯 개의 샘플 API를 제공합니다. 각 API는 IBM API Connect에 바로 등록할 수 있도록 설계되었습니다.
 
 ---
 
@@ -12,6 +12,7 @@
 ├── api2-salary/       ← Python + FastAPI     | Keycloak OAuth2/OIDC + RBAC 연봉 관리 REST API
 ├── api3-tours/        ← Node.js + Express    | 크루즈 여행사 관리 REST API
 ├── api4-graphql/      ← Node.js + Apollo v4  | 크루즈 여행사 GraphQL API
+├── api5-odata/        ← Node.js + Express    | OData 4.0 제품 카탈로그 API
 ├── local-dev/         ← Docker Compose로 로컬 전체 환경 실행 (Keycloak 포함)
 └── apic/              ← IBM API Connect Assembly YAML 정책 파일
 ```
@@ -31,6 +32,9 @@ cd api3-tours && npm install && npm start
 
 # API 4 — Tours GraphQL (포트 4000, 의존성 없음)
 cd api4-graphql && npm install && npm start
+
+# API 5 — OData Product Catalog (포트 3003, 의존성 없음)
+cd api5-odata && npm install && npm start
 ```
 
 → Keycloak 포함 전체 환경: [local-dev/README.md](local-dev/README.md)
@@ -153,20 +157,71 @@ npm start
 
 ---
 
+## API 5 — OData 4.0 Product Catalog API
+
+**목적:** OData 4.0 쿼리 옵션(`$filter`, `$select`, `$orderby`, `$expand` 등) 시연
+**기술 스택:** Node.js 18 + Express 4 (in-memory, 의존성 없음)
+**포트:** `3003`
+
+> **IBM API Connect 등록 시 참고:** IBM API Connect 12.1.1 기준, DataPower API Gateway는 별도의 "OData API" 타입을 지원하지 않습니다.
+> 이 API는 **REST API(OpenAPI 3.0)** 로 등록하며, OData 쿼리 파라미터(`$filter`, `$expand` 등)는 `invoke` 정책의 **Parameter control**을 통해 백엔드로 그대로 전달됩니다.
+
+### 빠른 시작
+```bash
+cd api5-odata
+npm install
+npm start
+# → http://localhost:3003 (OData 서비스 문서)
+```
+
+### 주요 엔드포인트
+| 엔드포인트 | 설명 |
+|-----------|------|
+| `GET /` | OData 서비스 문서 (엔티티 셋 목록) |
+| `GET /$metadata` | CSDL XML 메타데이터 문서 |
+| `GET /Products` | 제품 목록 (`$filter`, `$select`, `$orderby`, `$top`, `$skip`, `$count`, `$expand` 지원) |
+| `GET /Products/{id}` | 제품 단건 조회 |
+| `POST /Products` | 제품 생성 |
+| `PATCH /Products/{id}` | 제품 부분 수정 |
+| `DELETE /Products/{id}` | 제품 삭제 |
+| `GET /Categories` | 카테고리 목록 (OData 쿼리 옵션 지원) |
+| `GET /Categories/{id}/Products` | 카테고리별 제품 목록 (네비게이션 프로퍼티) |
+
+### OData vs REST 핵심 차이
+- **표준화된 쿼리 문법** — `$filter`, `$orderby`, `$select` 로 클라이언트가 직접 데이터 형태를 제어
+- **`$expand` 로 관계 데이터 인라인** — 별도 요청 없이 연관 엔티티 포함
+- **`/$metadata` 로 스키마 자동 노출** — CSDL XML 기반 자동 문서화
+
+→ 자세한 내용: [api5-odata/README.md](api5-odata/README.md)
+
+---
+
 ## IBM API Connect 등록 방법
 
-### 방법 1 — OpenAPI/GraphQL 명세서로 Import
+> **게이트웨이 타입 선택 기준 (버전 12.1.1 기준)**
+> - **DataPower API Gateway**: 기업 표준 게이트웨이. REST, SOAP, GraphQL API 지원. `invoke` 정책 버전 2.0.0 이상 사용.
+> - **DataPower Nano Gateway**: 클라우드 네이티브 경량 게이트웨이. OpenAPI 3.0 REST API 전용 (OpenAPI 2.0 미지원).
+> - **DataPower Gateway (v5 compatible)**: 레거시 호환 게이트웨이 (**deprecated** — 신규 배포에는 사용 금지).
+
+### 방법 1 — OpenAPI 명세서로 REST API Import
+
+IBM API Connect 12.1.1에서 REST API를 등록하는 정식 경로는 **API Studio > Add an API > Create a REST API from an OpenAPI definition**입니다.
 
 | API | 명세서 파일 | Import 방법 |
 |-----|-----------|------------|
-| Library API | `api1-library/openapi.yaml` | API Connect > Develop > Import OpenAPI |
-| Salary API | `api2-salary/openapi.yaml` | API Connect > Develop > Import OpenAPI |
-| Tours REST API | `api3-tours/openapi.yaml` | API Connect > Develop > Import OpenAPI |
-| Tours GraphQL API | `api4-graphql/src/schema/schema.graphql` | API Connect > Develop > Create GraphQL API |
+| Library API | `api1-library/openapi.yaml` | API Studio > Add an API > From file (OpenAPI 3.0) |
+| Salary API | `api2-salary/openapi.yaml` | API Studio > Add an API > From file (OpenAPI 3.0) |
+| Tours REST API | `api3-tours/openapi.yaml` | API Studio > Add an API > From file (OpenAPI 3.0) |
+| Tours GraphQL API | `api4-graphql/src/schema/schema.graphql` | API Studio > Add an API > Create a GraphQL API |
+| OData Catalog API | `api5-odata/openapi.yaml` | API Studio > Add an API > From file (OpenAPI 3.0, REST API로 등록) |
 
 ### 방법 2 — APIC Assembly YAML로 Import (권장)
 
 `apic/` 폴더의 파일은 **Assembly 정책이 포함된 완성형 API 정의**입니다.
+
+> **참고:** `api5-odata`는 현재 `apic/` 폴더에 Assembly YAML이 제공되지 않습니다.
+> API Studio UI를 통해 방법 1로 등록한 후, Assembly 편집기에서 `invoke` 정책을 직접 추가하세요.
+> `invoke` 정책 설정 시 **Parameter control** 항목을 "Allowlist 없음(전체 통과)"으로 유지해야 `$filter`, `$expand` 등 OData 쿼리 파라미터가 백엔드로 정상 전달됩니다.
 
 ```bash
 # apic CLI 로그인
@@ -192,6 +247,7 @@ apic publish apic/api2-salary-apic.yaml --server management.example.com \
 | API 2 | Python | 3.11+ |
 | API 3 | Node.js | 18+ |
 | API 4 | Node.js | 18+ |
+| API 5 | Node.js | 18+ |
 
 ---
 
@@ -513,6 +569,19 @@ sudo ufw allow 3002/tcp
 │   │   ├── index.js                    ← Express 서버 (PORT=3002)
 │   │   ├── data/store.js               ← in-memory (cruises/customers/bookings)
 │   │   └── routes/                     ← cruises, customers, bookings
+│   ├── openshift/                      ← OCP 배포 매니페스트
+│   ├── kubernetes/                     ← K8s 배포 매니페스트
+│   └── deploy/vm/                      ← Linux VM 배포 파일
+│
+├── api5-odata/                         ← Node.js OData 4.0 API (in-memory, 의존성 없음)
+│   ├── Dockerfile / .dockerignore
+│   ├── package.json
+│   ├── openapi.yaml                    ← OpenAPI 3.0 명세서
+│   ├── EXAMPLES.md
+│   ├── src/
+│   │   ├── index.js                    ← Express 서버 (PORT=3003)
+│   │   ├── data/store.js               ← in-memory (products/categories)
+│   │   └── routes/                     ← products, categories, metadata
 │   ├── openshift/                      ← OCP 배포 매니페스트
 │   ├── kubernetes/                     ← K8s 배포 매니페스트
 │   └── deploy/vm/                      ← Linux VM 배포 파일
