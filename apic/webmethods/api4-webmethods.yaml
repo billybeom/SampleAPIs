@@ -1,0 +1,230 @@
+# =============================================================================
+# IBM API Connect — webMethods API Gateway
+# API 4: GraphQL Product API (Apollo Server v4, 포트 4000)
+#
+# webMethods의 GraphQL 처리 방식:
+#   - DataPower처럼 GatewayScript 사용 불가
+#   - external-endpoint 정책으로 사전 검증 서비스 호출 가능
+#   - request-transformation으로 쿼리 크기 제한
+#   - service-result-cache로 introspection 쿼리 캐싱
+# =============================================================================
+
+# =====================================================================
+# --- Swagger 2.0 명세 ---
+# =====================================================================
+swagger: "2.0"
+info:
+  title: GraphQL Product API
+  description: |
+    GraphQL 기반 제품 카탈로그 API — webMethods API Gateway 샘플
+    백엔드: http://graphql-api:4000
+    단일 엔드포인트: POST /graphql
+  version: "1.0.0"
+  x-ibm-name: graphql-product-api-wm
+
+basePath: /graphql/v1
+schemes: [https]
+consumes: [application/json]
+produces: [application/json]
+security: []
+securityDefinitions: {}
+
+x-ibm-configuration:
+  testable: true
+  enforced: true
+  phase: realized
+  gateway: webmethods-api-gateway
+
+  assembly:
+    execute:
+      # ── 1단계: Rate Limiter ────────────────────────────────────────────
+      - rate-limiter:
+          version: 2.0.0
+          title: Rate Limiter
+          rate: {count: 100, interval: 60}
+          burst: {count: 10, interval: 1}
+          reject-message: 요청 한도를 초과했습니다.
+
+      # ── 2단계: Monitor Traffic (요청 크기 제한) ────────────────────────
+      # DataPower GatewayScript 쿼리 깊이 검증 대체
+      # webMethods에서는 monitor-traffic으로 요청 크기/속도를 제한합니다.
+      - monitor-traffic:
+          version: 2.0.0
+          title: GraphQL Request Guard
+          max-request-size: 65536   # 64KB 이상 GraphQL 쿼리 차단
+          alert-on-violation: true
+
+      # ── 3단계: Service Result Cache (GraphQL introspection 캐싱) ───────
+      # DataPower에는 없는 webMethods 전용 캐싱 정책
+      - service-result-cache:
+          version: 2.0.0
+          title: Cache Introspection
+          # __schema, __type 쿼리만 캐싱 (5분)
+          cache-key: $(request.body.operationName)
+          ttl: 300
+          enabled: true
+
+      # ── 4단계: Request Transformation ────────────────────────────────
+      - request-transformation:
+          version: 2.0.0
+          title: Set GraphQL Headers
+          transformations:
+            - {type: set-header, name: X-API-Gateway,   value: IBM-webMethods-API-Gateway}
+            - {type: set-header, name: Content-Type,    value: application/json}
+            - {type: set-header, name: X-Request-ID,    value: $(request.headers.x-request-id)}
+
+      # ── 5단계: Invoke ──────────────────────────────────────────────────
+      - invoke:
+          version: 2.0.0
+          title: Invoke GraphQL Backend
+          url: http://graphql-api:4000/graphql
+          verb: POST
+          timeout: 30
+          forward-response: true
+
+      # ── 6단계: Log ────────────────────────────────────────────────────
+      - log:
+          version: 2.0.0
+          title: Log GraphQL Request
+          log-level: info
+          destination: api-gateway-log
+
+    catch:
+      - errors: [ConnectionError]
+        execute:
+          - response-transformation:
+              version: 2.0.0
+              title: Service Unavailable
+              status-code: 503
+              body: '{"errors":[{"message":"백엔드 GraphQL 서비스에 연결할 수 없습니다."}]}'
+  cors:
+    enabled: true
+
+paths:
+  /graphql:
+    post:
+      summary: GraphQL 쿼리/뮤테이션 실행
+      operationId: executeGraphQL
+      parameters:
+        - in: body
+          name: body
+          required: true
+          schema:
+            $ref: "#/definitions/GraphQLRequest"
+      responses:
+        "200":
+          description: GraphQL 실행 결과
+          schema: {$ref: "#/definitions/GraphQLResponse"}
+        "400": {description: GraphQL 쿼리 오류}
+
+definitions:
+  GraphQLRequest:
+    type: object
+    required: [query]
+    properties:
+      query:         {type: string}
+      variables:     {type: object}
+      operationName: {type: string}
+  GraphQLResponse:
+    type: object
+    properties:
+      data:   {type: object}
+      errors: {type: array, items: {type: object}}
+
+---
+# =====================================================================
+# --- OpenAPI 3.0 명세 ---
+# =====================================================================
+openapi: "3.0.3"
+info:
+  title: GraphQL Product API
+  description: |
+    GraphQL 기반 제품 카탈로그 API — webMethods API Gateway 샘플
+  version: "1.0.0"
+  x-ibm-name: graphql-product-api-wm-oas3
+
+servers:
+  - url: https://webmethods-gateway.example.com/graphql/v1
+    description: webMethods API Gateway (운영)
+
+x-ibm-configuration:
+  testable: true
+  enforced: true
+  phase: realized
+  gateway: webmethods-api-gateway
+
+  assembly:
+    execute:
+      - rate-limiter:
+          version: 2.0.0
+          title: Rate Limiter
+          rate: {count: 100, interval: 60}
+          burst: {count: 10, interval: 1}
+          reject-message: 요청 한도를 초과했습니다.
+      - monitor-traffic:
+          version: 2.0.0
+          title: GraphQL Request Guard
+          max-request-size: 65536
+          alert-on-violation: true
+      - service-result-cache:
+          version: 2.0.0
+          title: Cache Introspection
+          cache-key: $(request.body.operationName)
+          ttl: 300
+          enabled: true
+      - request-transformation:
+          version: 2.0.0
+          title: Set GraphQL Headers
+          transformations:
+            - {type: set-header, name: X-API-Gateway, value: IBM-webMethods-API-Gateway}
+            - {type: set-header, name: Content-Type,  value: application/json}
+      - invoke:
+          version: 2.0.0
+          title: Invoke GraphQL Backend
+          url: http://graphql-api:4000/graphql
+          verb: POST
+          timeout: 30
+          forward-response: true
+    catch:
+      - errors: [ConnectionError]
+        execute:
+          - response-transformation:
+              version: 2.0.0
+              title: Service Unavailable
+              status-code: 503
+              body: '{"errors":[{"message":"백엔드 서비스에 연결할 수 없습니다."}]}'
+  cors:
+    enabled: true
+
+paths:
+  /graphql:
+    post:
+      summary: GraphQL 쿼리/뮤테이션 실행
+      operationId: executeGraphQL
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/GraphQLRequest"}
+      responses:
+        "200":
+          description: GraphQL 실행 결과
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/GraphQLResponse"}
+        "400": {description: 쿼리 오류}
+
+components:
+  schemas:
+    GraphQLRequest:
+      type: object
+      required: [query]
+      properties:
+        query:         {type: string}
+        variables:     {type: object, nullable: true}
+        operationName: {type: string, nullable: true}
+    GraphQLResponse:
+      type: object
+      properties:
+        data:   {type: object, nullable: true}
+        errors: {type: array, nullable: true, items: {type: object}}

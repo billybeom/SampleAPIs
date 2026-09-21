@@ -1,0 +1,385 @@
+# =============================================================================
+# IBM API Connect 12.1.1.2 — DataPower API Gateway
+# Keycloak RBAC 역할 기반 접근 제어 정책 모음
+#
+# 파일 목적:
+#   각 샘플 API(api1~api5)에 적용 가능한 RBAC 정책 패턴을 정의합니다.
+#   Keycloak JWT의 realm_access.roles 클레임을 기반으로 API 경로별
+#   접근 권한을 DataPower GatewayScript로 제어합니다.
+#
+# 포함 정책:
+#   rbac-salary   : api2-salary 역할 정책 (employee/manager/hr_system)
+#   rbac-library  : api1-library 역할 정책 (librarian/member/public)
+#   rbac-tours    : api3-tours 역할 정책 (agent/customer)
+#   rbac-universal: 범용 RBAC 정책 (required-roles 속성 기반 동적 검사)
+#
+# 사용 전 확인 사항:
+#   - jwt-validate 또는 oauth 인트로스펙션 정책 실행 완료 후 삽입
+#   - decoded.jwt 또는 oauth.* context 변수에 클레임이 저장된 상태
+# =============================================================================
+
+---
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. api2-salary RBAC 정책
+#
+# Keycloak 역할 구조:
+#   - employee : 본인 연봉 조회만 가능 (GET /salaries/me)
+#   - manager  : 부서원 연봉 조회 가능 (GET /salaries, GET /salaries/{id})
+#   - hr_system: 전체 조회/수정/삭제 가능 (모든 엔드포인트)
+#
+# 우선순위: hr_system > manager > employee
+# ─────────────────────────────────────────────────────────────────────────────
+x-rbac-salary:
+  title: "api2-salary RBAC 정책"
+  gatewayscript:
+    version: 2.0.0
+    title: "Salary API RBAC 검증"
+    source: |
+      /**
+       * Salary API RBAC 정책 (DataPower GatewayScript)
+       *
+       * JWT 검증(jwt-validate) 이후 실행되어야 합니다.
+       * decoded.jwt context 변수에서 Keycloak 클레임을 읽습니다.
+       */
+
+      var decodedJwt = context.get('decoded.jwt');
+      var method     = context.get('request.verb');
+      var path       = context.get('request.path') || '';
+
+      // JWT 클레임 확인
+      if (!decodedJwt) {
+        context.set('message.status.code', 401);
+        context.set('message.status.reason', 'Unauthorized');
+        context.set('message.body', JSON.stringify({
+          error: 'invalid_token',
+          message: 'JWT 클레임을 읽을 수 없습니다. jwt-validate 정책이 먼저 실행되어야 합니다.'
+        }));
+        context.reject('UnauthorizedError');
+        return;
+      }
+
+      var sub = decodedJwt.sub || '';
+
+      // Keycloak 역할 추출 (realm + client 역할 병합)
+      var realmRoles  = (decodedJwt.realm_access  && decodedJwt.realm_access.roles)  || [];
+      var azp         = decodedJwt.azp || decodedJwt.client_id || '';
+      var clientRoles = (decodedJwt.resource_access && decodedJwt.resource_access[azp] &&
+                         decodedJwt.resource_access[azp].roles) || [];
+      var allRoles    = realmRoles.concat(clientRoles);
+
+      // 역할 우선순위 결정
+      var hierarchy    = ['hr_system', 'manager', 'employee'];
+      var effectiveRole = null;
+      for (var i = 0; i < hierarchy.length; i++) {
+        if (allRoles.indexOf(hierarchy[i]) !== -1) {
+          effectiveRole = hierarchy[i];
+          break;
+        }
+      }
+
+      // 역할 없음 → 403
+      if (!effectiveRole) {
+        context.set('message.status.code', 403);
+        context.set('message.status.reason', 'Forbidden');
+        context.set('message.body', JSON.stringify({
+          error: 'forbidden',
+          message: 'Salary API 접근에는 employee, manager, hr_system 역할 중 하나가 필요합니다.',
+          sub: sub
+        }));
+        context.reject('ForbiddenError');
+        return;
+      }
+
+      // ── 경로별 권한 매트릭스 ─────────────────────────────────────────────
+      //
+      // GET  /salaries/me         → employee, manager, hr_system  (본인 연봉)
+      // GET  /salaries            → manager, hr_system             (전체 목록)
+      // GET  /salaries/{id}       → manager, hr_system             (특정 직원)
+      // POST /salaries            → hr_system                      (신규 등록)
+      // PUT  /salaries/{id}       → manager, hr_system             (연봉 수정)
+      // DELETE /salaries/{id}     → hr_system                      (삭제)
+
+      var isSalariesMe   = path.match(/\/salaries\/me($|\?)/);
+      var isSalariesById = path.match(/\/salaries\/[^/]+($|\?)/);
+      var isSalariesRoot = path.match(/\/salaries($|\?)/);
+
+      var denied = false;
+      var denyReason = '';
+
+      if (method === 'DELETE') {
+        // 삭제: hr_system 전용
+        if (effectiveRole !== 'hr_system') {
+          denied = true;
+          denyReason = '연봉 삭제는 hr_system 역할만 허용됩니다.';
+        }
+      } else if (method === 'POST' && isSalariesRoot) {
+        // 신규 등록: hr_system 전용
+        if (effectiveRole !== 'hr_system') {
+          denied = true;
+          denyReason = '연봉 신규 등록은 hr_system 역할만 허용됩니다.';
+        }
+      } else if ((method === 'PUT' || method === 'PATCH') && isSalariesById) {
+        // 수정: manager 이상
+        if (effectiveRole === 'employee') {
+          denied = true;
+          denyReason = '연봉 수정은 manager 또는 hr_system 역할이 필요합니다.';
+        }
+      } else if (method === 'GET' && !isSalariesMe) {
+        // 전체 목록 / 특정 직원 조회: manager 이상
+        if (effectiveRole === 'employee') {
+          // employee는 본인 연봉만 허용 — /salaries/me 로 리다이렉트 안내
+          denied = true;
+          denyReason = '연봉 목록 조회는 manager 또는 hr_system 역할이 필요합니다. 본인 연봉은 /salaries/me 를 사용하세요.';
+        }
+      }
+
+      if (denied) {
+        context.set('message.status.code', 403);
+        context.set('message.status.reason', 'Forbidden');
+        context.set('message.body', JSON.stringify({
+          error: 'forbidden',
+          message: denyReason,
+          effective_role: effectiveRole,
+          sub: sub
+        }));
+        context.reject('ForbiddenError');
+        return;
+      }
+
+      // 권한 통과 — 헤더 설정
+      context.set('message.headers.X-User-Sub',      sub);
+      context.set('message.headers.X-User-Role',     effectiveRole);
+      context.set('message.headers.X-All-Roles',     allRoles.join(','));
+      context.set('message.headers.X-User-Name',     decodedJwt.preferred_username || '');
+      context.set('message.headers.X-RBAC-Passed',   'true');
+
+---
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. api1-library RBAC 정책
+#
+# Keycloak 역할 구조:
+#   - public     : 도서 목록/상세 조회만 가능 (GET /books, GET /books/{id})
+#   - member     : 도서 대출/반납 가능 (POST /loans, PUT /loans/{id})
+#   - librarian  : 전체 관리 (도서 추가/수정/삭제, 대출 관리)
+#
+# 우선순위: librarian > member > public
+# ─────────────────────────────────────────────────────────────────────────────
+x-rbac-library:
+  title: "api1-library RBAC 정책"
+  gatewayscript:
+    version: 2.0.0
+    title: "Library API RBAC 검증"
+    source: |
+      var decodedJwt  = context.get('decoded.jwt');
+      var method      = context.get('request.verb');
+      var path        = context.get('request.path') || '';
+
+      if (!decodedJwt) {
+        context.set('message.status.code', 401);
+        context.set('message.body', JSON.stringify({error:'invalid_token',message:'JWT 클레임 없음'}));
+        context.reject('UnauthorizedError'); return;
+      }
+
+      var realmRoles  = (decodedJwt.realm_access && decodedJwt.realm_access.roles) || [];
+      var azp         = decodedJwt.azp || '';
+      var clientRoles = (decodedJwt.resource_access && decodedJwt.resource_access[azp] &&
+                         decodedJwt.resource_access[azp].roles) || [];
+      var allRoles    = realmRoles.concat(clientRoles);
+
+      var hierarchy = ['librarian', 'member', 'public'];
+      var role = null;
+      for (var i = 0; i < hierarchy.length; i++) {
+        if (allRoles.indexOf(hierarchy[i]) !== -1) { role = hierarchy[i]; break; }
+      }
+
+      // 역할 없어도 GET 읽기는 허용 (public API)
+      var isWriteMethod = (method === 'POST' || method === 'PUT' ||
+                           method === 'PATCH' || method === 'DELETE');
+
+      if (isWriteMethod && !role) {
+        context.set('message.status.code', 403);
+        context.set('message.body', JSON.stringify({
+          error: 'forbidden',
+          message: '도서관 API 쓰기 작업에는 member 또는 librarian 역할이 필요합니다.'
+        }));
+        context.reject('ForbiddenError'); return;
+      }
+
+      if (method === 'DELETE' && role !== 'librarian') {
+        context.set('message.status.code', 403);
+        context.set('message.body', JSON.stringify({
+          error: 'forbidden',
+          message: '도서 삭제는 librarian 역할만 허용됩니다.'
+        }));
+        context.reject('ForbiddenError'); return;
+      }
+
+      context.set('message.headers.X-User-Role',   role || 'anonymous');
+      context.set('message.headers.X-All-Roles',   allRoles.join(','));
+      context.set('message.headers.X-RBAC-Passed', 'true');
+
+---
+# ─────────────────────────────────────────────────────────────────────────────
+# 3. api3-tours RBAC 정책
+#
+# Keycloak 역할 구조:
+#   - customer : 패키지 조회, 예약 생성/조회 (본인)
+#   - agent    : 전체 예약 관리, 패키지 등록/수정
+#
+# 우선순위: agent > customer
+# ─────────────────────────────────────────────────────────────────────────────
+x-rbac-tours:
+  title: "api3-tours RBAC 정책"
+  gatewayscript:
+    version: 2.0.0
+    title: "Tours API RBAC 검증"
+    source: |
+      var decodedJwt  = context.get('decoded.jwt');
+      var method      = context.get('request.verb');
+      var path        = context.get('request.path') || '';
+
+      if (!decodedJwt) {
+        context.set('message.status.code', 401);
+        context.set('message.body', JSON.stringify({error:'invalid_token',message:'JWT 클레임 없음'}));
+        context.reject('UnauthorizedError'); return;
+      }
+
+      var realmRoles  = (decodedJwt.realm_access && decodedJwt.realm_access.roles) || [];
+      var azp         = decodedJwt.azp || '';
+      var clientRoles = (decodedJwt.resource_access && decodedJwt.resource_access[azp] &&
+                         decodedJwt.resource_access[azp].roles) || [];
+      var allRoles    = realmRoles.concat(clientRoles);
+
+      var hierarchy = ['agent', 'customer'];
+      var role = null;
+      for (var i = 0; i < hierarchy.length; i++) {
+        if (allRoles.indexOf(hierarchy[i]) !== -1) { role = hierarchy[i]; break; }
+      }
+
+      // 패키지 조회(GET /packages)는 인증 없이 허용
+      if (method === 'GET' && path.indexOf('/customers') === -1) {
+        context.set('message.headers.X-User-Role',   role || 'anonymous');
+        context.set('message.headers.X-RBAC-Passed', 'true');
+        return;
+      }
+
+      // 예약/고객 관련 엔드포인트는 인증 필수
+      if (!role) {
+        context.set('message.status.code', 401);
+        context.set('message.body', JSON.stringify({
+          error: 'unauthorized',
+          message: 'Tours API 예약 기능은 로그인이 필요합니다.'
+        }));
+        context.reject('UnauthorizedError'); return;
+      }
+
+      // 패키지 등록/수정/삭제는 agent만
+      if ((method === 'POST' || method === 'PUT' || method === 'DELETE') &&
+          path.indexOf('/packages') !== -1 && role !== 'agent') {
+        context.set('message.status.code', 403);
+        context.set('message.body', JSON.stringify({
+          error: 'forbidden',
+          message: '패키지 관리는 agent 역할만 허용됩니다.'
+        }));
+        context.reject('ForbiddenError'); return;
+      }
+
+      // customer는 본인 이메일(emailAddress) 기준 고객 데이터만 접근
+      // api3-tours에서 :id = emailAddress 규칙
+      if (role === 'customer' && path.indexOf('/customers/') !== -1) {
+        var email = decodedJwt.email || '';
+        var pathEmail = path.split('/customers/')[1];
+        if (pathEmail && decodeURIComponent(pathEmail).split('?')[0] !== email) {
+          context.set('message.status.code', 403);
+          context.set('message.body', JSON.stringify({
+            error: 'forbidden',
+            message: '본인의 고객 정보만 접근할 수 있습니다.',
+            tip: 'api3-tours에서 고객 ID는 이메일 주소입니다.'
+          }));
+          context.reject('ForbiddenError'); return;
+        }
+      }
+
+      context.set('message.headers.X-User-Role',   role);
+      context.set('message.headers.X-All-Roles',   allRoles.join(','));
+      context.set('message.headers.X-User-Email',  decodedJwt.email || '');
+      context.set('message.headers.X-RBAC-Passed', 'true');
+
+---
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. 범용 RBAC 정책 (required-roles 동적 검사)
+#
+# 사용법:
+#   API 레벨 또는 오퍼레이션 레벨 x-required-roles 배열을 지정하면
+#   이 스크립트가 동적으로 역할 충족 여부를 검사합니다.
+#
+# 예시 (API YAML):
+#   x-required-roles: [manager, hr_system]
+# ─────────────────────────────────────────────────────────────────────────────
+x-rbac-universal:
+  title: "범용 RBAC 정책 (x-required-roles 기반)"
+  gatewayscript:
+    version: 2.0.0
+    title: "범용 Keycloak RBAC 검증"
+    source: |
+      /**
+       * 범용 RBAC 정책
+       *
+       * API YAML에 x-required-roles 배열이 정의된 경우 해당 역할 중
+       * 하나 이상을 보유해야 합니다 (OR 조건).
+       * x-required-roles가 없으면 인증(JWT 유효성)만 검사합니다.
+       */
+
+      var decodedJwt = context.get('decoded.jwt');
+
+      if (!decodedJwt) {
+        context.set('message.status.code', 401);
+        context.set('message.body', JSON.stringify({
+          error: 'invalid_token',
+          message: 'JWT가 없거나 검증에 실패했습니다.'
+        }));
+        context.reject('UnauthorizedError');
+        return;
+      }
+
+      // API YAML의 x-required-roles 읽기
+      var requiredRoles = context.get('api.properties.x-required-roles');
+      if (typeof requiredRoles === 'string') {
+        try { requiredRoles = JSON.parse(requiredRoles); } catch(e) { requiredRoles = [requiredRoles]; }
+      }
+      if (!Array.isArray(requiredRoles) || requiredRoles.length === 0) {
+        // 필요 역할 미지정 → 인증만 통과하면 허용
+        context.set('message.headers.X-RBAC-Passed', 'true');
+        return;
+      }
+
+      // 보유 역할 추출
+      var realmRoles  = (decodedJwt.realm_access && decodedJwt.realm_access.roles) || [];
+      var azp         = decodedJwt.azp || '';
+      var clientRoles = (decodedJwt.resource_access && decodedJwt.resource_access[azp] &&
+                         decodedJwt.resource_access[azp].roles) || [];
+      var allRoles    = realmRoles.concat(clientRoles);
+
+      // OR 조건: required 중 하나라도 있으면 통과
+      var hasRole = requiredRoles.some(function(r) {
+        return allRoles.indexOf(r) !== -1;
+      });
+
+      if (!hasRole) {
+        context.set('message.status.code', 403);
+        context.set('message.status.reason', 'Forbidden');
+        context.set('message.body', JSON.stringify({
+          error: 'forbidden',
+          message: '이 API에 접근하려면 다음 역할 중 하나가 필요합니다: ' + requiredRoles.join(', '),
+          your_roles: allRoles,
+          required_roles: requiredRoles
+        }));
+        context.reject('ForbiddenError');
+        return;
+      }
+
+      // 통과
+      context.set('message.headers.X-All-Roles',   allRoles.join(','));
+      context.set('message.headers.X-User-Sub',    decodedJwt.sub || '');
+      context.set('message.headers.X-User-Name',   decodedJwt.preferred_username || '');
+      context.set('message.headers.X-RBAC-Passed', 'true');

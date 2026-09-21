@@ -1,0 +1,342 @@
+# =============================================================================
+# IBM API Connect — DataPower API Gateway
+# API 4: GraphQL Product API (Apollo Server v4 + Express, 포트 4000)
+#
+# Assembly 정책 흐름:
+#   1. rate-limit         : 분당 100회 제한
+#   2. set-variable       : Content-Type 강제 및 식별 헤더 주입
+#   3. gatewayscript      : GraphQL 쿼리 깊이/복잡도 사전 검증 (DataPower 전용)
+#   4. invoke             : 백엔드 GraphQL 서버 호출
+#
+# 비고: GraphQL 엔드포인트는 단일 POST /graphql
+#       DataPower는 GraphQL Cost Analysis 정책도 지원 (주석 참조)
+# =============================================================================
+
+# =====================================================================
+# --- Swagger 2.0 명세 ---
+# =====================================================================
+swagger: "2.0"
+info:
+  title: GraphQL Product API
+  description: |
+    GraphQL 기반 제품 카탈로그 API — DataPower API Gateway 샘플
+    백엔드: http://graphql-api:4000
+    엔드포인트: POST /graphql (단일 엔드포인트)
+    Apollo Sandbox: http://graphql-api:4000 (인트로스펙션 항상 활성)
+  version: "1.0.0"
+  x-ibm-name: graphql-product-api-dp
+
+basePath: /graphql/v1
+schemes:
+  - https
+consumes:
+  - application/json
+produces:
+  - application/json
+
+security: []
+securityDefinitions: {}
+
+x-ibm-configuration:
+  testable: true
+  enforced: true
+  phase: realized
+  gateway: datapower-api-gateway
+
+  assembly:
+    execute:
+      # ── 1단계: Rate Limit ──────────────────────────────────────────────
+      - rate-limit:
+          version: 2.0.0
+          title: Rate Limit
+          source: plan
+          reject-message: 요청 한도를 초과했습니다.
+
+      # ── 2단계: Set Variable ────────────────────────────────────────────
+      - set-variable:
+          version: 2.0.0
+          title: Set GraphQL Headers
+          actions:
+            - set: message.headers.X-API-Gateway
+              value: IBM-DataPower-API-Gateway
+              type: string
+            - set: message.headers.X-Request-ID
+              value: $(request.headers.x-request-id)
+              type: string
+            # GraphQL 요청은 항상 application/json
+            - set: message.headers.Content-Type
+              value: application/json
+              type: string
+
+      # ── 3단계: GatewayScript — GraphQL 쿼리 깊이 검증 ─────────────────
+      # DataPower API Gateway 전용: GatewayScript로 쿼리 복잡도 사전 필터링
+      - gatewayscript:
+          version: 2.0.0
+          title: Validate GraphQL Depth
+          source: |
+            var apim = require('apim');
+            var body = apim.getvariable('request.body');
+            if (body && body.query) {
+              // 중첩 깊이 카운트 (간단한 괄호 기반 검사)
+              var depth = 0;
+              var maxDepth = 0;
+              for (var i = 0; i < body.query.length; i++) {
+                if (body.query[i] === '{') { depth++; if (depth > maxDepth) maxDepth = depth; }
+                else if (body.query[i] === '}') { depth--; }
+              }
+              if (maxDepth > 5) {
+                apim.setvariable('message.status.code', 400);
+                apim.setvariable('message.body',
+                  JSON.stringify({errors:[{message:'GraphQL 쿼리 깊이가 최대치(5)를 초과합니다.'}]}));
+                apim.error('DepthLimitExceeded');
+              }
+            }
+
+      # ── (선택) GraphQL Cost Analysis 정책 ─────────────────────────────
+      # DataPower API Gateway 전용 GraphQL 비용 분석 정책
+      # - graphql-cost-analysis:
+      #     version: 2.0.0
+      #     title: GraphQL Cost Analysis
+      #     max-cost: 1000
+      #     type-cost-map:
+      #       Query: 1
+      #       Product: 2
+      #       Review: 1
+
+      # ── 4단계: Invoke ──────────────────────────────────────────────────
+      - invoke:
+          version: 2.2.0
+          title: Invoke GraphQL Backend
+          target-url: $(target-url)/graphql
+          verb: POST
+          follow-redirects: false
+          timeout: 30
+          output: message
+
+    catch:
+      - errors: [ConnectionError, DepthLimitExceeded]
+        execute:
+          - set-variable:
+              version: 2.0.0
+              title: Error Response
+              actions:
+                - set: message.status.code
+                  value: 503
+                  type: number
+                - set: message.body
+                  value: '{"errors":[{"message":"백엔드 GraphQL 서비스에 연결할 수 없습니다."}]}'
+                  type: string
+
+  properties:
+    target-url:
+      value: http://graphql-api:4000
+      description: 백엔드 GraphQL API URL
+      encoded: false
+
+  cors:
+    enabled: true
+
+paths:
+  /graphql:
+    post:
+      summary: GraphQL 쿼리/뮤테이션 실행
+      operationId: executeGraphQL
+      parameters:
+        - in: body
+          name: body
+          required: true
+          schema:
+            $ref: "#/definitions/GraphQLRequest"
+      responses:
+        "200":
+          description: GraphQL 실행 결과
+          schema:
+            $ref: "#/definitions/GraphQLResponse"
+        "400":
+          description: GraphQL 쿼리 오류 (깊이 초과, 파싱 오류 등)
+
+definitions:
+  GraphQLRequest:
+    type: object
+    required: [query]
+    properties:
+      query:
+        type: string
+        description: GraphQL 쿼리 또는 뮤테이션 문자열
+        example: "{ products { id name price } }"
+      variables:
+        type: object
+        description: GraphQL 변수 (선택)
+      operationName:
+        type: string
+        description: 수행할 오퍼레이션 이름 (선택)
+  GraphQLResponse:
+    type: object
+    properties:
+      data:
+        type: object
+        description: GraphQL 응답 데이터
+      errors:
+        type: array
+        items:
+          type: object
+          properties:
+            message: {type: string}
+            locations:
+              type: array
+              items:
+                type: object
+                properties:
+                  line:   {type: integer}
+                  column: {type: integer}
+
+---
+# =====================================================================
+# --- OpenAPI 3.0 명세 ---
+# =====================================================================
+openapi: "3.0.3"
+info:
+  title: GraphQL Product API
+  description: |
+    GraphQL 기반 제품 카탈로그 API — DataPower API Gateway 샘플
+    백엔드: http://graphql-api:4000
+  version: "1.0.0"
+  x-ibm-name: graphql-product-api-dp-oas3
+
+servers:
+  - url: https://gateway.example.com/graphql/v1
+    description: DataPower API Gateway (운영)
+  - url: https://gateway-dev.example.com/graphql/v1
+    description: DataPower API Gateway (개발)
+
+x-ibm-configuration:
+  testable: true
+  enforced: true
+  phase: realized
+  gateway: datapower-api-gateway
+
+  assembly:
+    execute:
+      - rate-limit:
+          version: 2.0.0
+          title: Rate Limit
+          source: plan
+          reject-message: 요청 한도를 초과했습니다.
+      - set-variable:
+          version: 2.0.0
+          title: Set GraphQL Headers
+          actions:
+            - set: message.headers.X-API-Gateway
+              value: IBM-DataPower-API-Gateway
+              type: string
+            - set: message.headers.Content-Type
+              value: application/json
+              type: string
+      - gatewayscript:
+          version: 2.0.0
+          title: Validate GraphQL Depth
+          source: |
+            var apim = require('apim');
+            var body = apim.getvariable('request.body');
+            if (body && body.query) {
+              var depth = 0, maxDepth = 0;
+              for (var i = 0; i < body.query.length; i++) {
+                if (body.query[i] === '{') { depth++; if (depth > maxDepth) maxDepth = depth; }
+                else if (body.query[i] === '}') { depth--; }
+              }
+              if (maxDepth > 5) {
+                apim.setvariable('message.status.code', 400);
+                apim.setvariable('message.body',
+                  JSON.stringify({errors:[{message:'쿼리 깊이 초과'}]}));
+                apim.error('DepthLimitExceeded');
+              }
+            }
+      - invoke:
+          version: 2.2.0
+          title: Invoke GraphQL Backend
+          target-url: $(target-url)/graphql
+          verb: POST
+          timeout: 30
+          output: message
+
+    catch:
+      - errors: [ConnectionError]
+        execute:
+          - set-variable:
+              version: 2.0.0
+              title: Error Response
+              actions:
+                - set: message.status.code
+                  value: 503
+                  type: number
+                - set: message.body
+                  value: '{"errors":[{"message":"백엔드 서비스에 연결할 수 없습니다."}]}'
+                  type: string
+
+  properties:
+    target-url:
+      value: http://graphql-api:4000
+      description: 백엔드 GraphQL API URL
+      encoded: false
+
+  cors:
+    enabled: true
+
+paths:
+  /graphql:
+    post:
+      summary: GraphQL 쿼리/뮤테이션 실행
+      operationId: executeGraphQL
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/GraphQLRequest"}
+            examples:
+              listProducts:
+                summary: 제품 목록 조회
+                value:
+                  query: "{ products { id name price category { name } } }"
+              getProduct:
+                summary: 단건 조회
+                value:
+                  query: "query($id: ID!) { product(id: $id) { id name price } }"
+                  variables: {id: "1"}
+      responses:
+        "200":
+          description: GraphQL 실행 결과
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/GraphQLResponse"}
+        "400": {description: 쿼리 오류}
+
+components:
+  schemas:
+    GraphQLRequest:
+      type: object
+      required: [query]
+      properties:
+        query:
+          type: string
+          example: "{ products { id name price } }"
+        variables:
+          type: object
+          nullable: true
+        operationName:
+          type: string
+          nullable: true
+    GraphQLResponse:
+      type: object
+      properties:
+        data:
+          type: object
+          nullable: true
+        errors:
+          type: array
+          nullable: true
+          items:
+            type: object
+            properties:
+              message:   {type: string}
+              locations: {type: array, items: {type: object}}
+              path:      {type: array, items: {type: string}}

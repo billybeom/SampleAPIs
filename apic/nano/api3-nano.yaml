@@ -1,0 +1,256 @@
+# =============================================================================
+# IBM API Connect — DataPower Nano Gateway
+# API 3: Tours Management API / API 4: GraphQL API / API 5: OData API
+# ⚠️  OAS 3.0 전용
+# =============================================================================
+
+# ╔═══════════════════════════════════════════════════════════════════╗
+# ║ API 3: Tours Management API                                     ║
+# ╚═══════════════════════════════════════════════════════════════════╝
+openapi: "3.0.3"
+info:
+  title: Tours Management API
+  description: |
+    여행 상품(크루즈) / 고객 / 예약 관리 REST API — Nano Gateway 샘플
+    주의: /customers/:id 의 id는 emailAddress
+  version: "1.0.0"
+  x-ibm-name: tours-management-api-nano
+
+servers:
+  - url: https://nano-gateway.example.com/tours/v1
+
+x-ibm-configuration:
+  testable: true
+  enforced: true
+  phase: realized
+  gateway: datapower-nano-gateway
+
+  assembly:
+    execute:
+      - RateLimit:
+          version: 2.0.0
+          title: Rate Limit
+          count: 200
+          interval: 60
+          unit: second
+          hard-limit: true
+          reject-message: 요청 한도를 초과했습니다.
+      - Cors:
+          version: 2.0.0
+          title: CORS Policy
+          allow-origins: ["*"]
+          allow-methods: [GET, POST, PUT, DELETE, OPTIONS]
+          allow-headers: [Content-Type, X-Request-ID]
+          max-age: 3600
+      - Set:
+          version: 2.0.0
+          title: Set Headers
+          headers:
+            X-API-Gateway: "IBM-Nano-Gateway"
+            X-Request-ID: "$request.headers.\"x-request-id\""
+      - Invoke:
+          version: 2.0.0
+          title: Invoke Tours Backend
+          url: "http://tours-api:3002{$request.path}{$request.queryString ? '?' & $request.queryString : ''}"
+          verb: keep
+          timeout: 30
+          redirect-policy: follow
+    catch:
+      - errors: [ConnectionError]
+        execute:
+          - Set:
+              version: 2.0.0
+              title: Error Response
+              status-code: 503
+              body: '{"error":"백엔드 서비스에 연결할 수 없습니다."}'
+
+paths:
+  /cruises:
+    get:
+      summary: 크루즈 목록 조회
+      operationId: listCruises
+      parameters:
+        - {name: startDate, in: query, schema: {type: string, format: date}}
+        - {name: endDate,   in: query, schema: {type: string, format: date}}
+        - {name: startPort, in: query, schema: {type: string}}
+        - {name: numDays,   in: query, schema: {type: integer}}
+      responses:
+        "200":
+          description: 크루즈 목록
+          content:
+            application/json:
+              schema: {type: array, items: {$ref: "#/components/schemas/Cruise"}}
+  /cruises/{id}:
+    parameters:
+      - {name: id, in: path, required: true, schema: {type: string}}
+    get:
+      summary: 크루즈 단건 조회
+      operationId: getCruise
+      responses:
+        "200":
+          description: 크루즈 정보
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Cruise"}
+        "404": {description: 크루즈를 찾을 수 없음}
+  /customers:
+    get:
+      summary: 고객 목록
+      operationId: listCustomers
+      responses:
+        "200":
+          description: 고객 목록
+          content:
+            application/json:
+              schema: {type: array, items: {$ref: "#/components/schemas/Customer"}}
+    post:
+      summary: 고객 생성
+      operationId: createCustomer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CustomerInput"}
+      responses:
+        "201":
+          description: 생성된 고객
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Customer"}
+  /customers/{id}:
+    parameters:
+      - {name: id, in: path, required: true, schema: {type: string}, description: "고객 이메일 주소"}
+    get:
+      summary: 고객 단건 조회 (id=emailAddress)
+      operationId: getCustomer
+      responses:
+        "200":
+          description: 고객 정보
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Customer"}
+        "404": {description: 고객을 찾을 수 없음}
+    put:
+      summary: 고객 수정
+      operationId: updateCustomer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CustomerInput"}
+      responses:
+        "200":
+          description: 수정된 고객
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Customer"}
+    delete:
+      summary: 고객 삭제
+      operationId: deleteCustomer
+      responses:
+        "200": {description: 삭제 완료}
+  /bookings:
+    get:
+      summary: 예약 목록
+      operationId: listBookings
+      parameters:
+        - {name: cruiseID,   in: query, schema: {type: string}}
+        - {name: customerID, in: query, schema: {type: string}}
+      responses:
+        "200":
+          description: 예약 목록
+          content:
+            application/json:
+              schema: {type: array, items: {$ref: "#/components/schemas/Booking"}}
+    post:
+      summary: 예약 생성
+      operationId: createBooking
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/BookingInput"}
+      responses:
+        "201":
+          description: 생성된 예약
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Booking"}
+  /bookings/{id}:
+    parameters:
+      - {name: id, in: path, required: true, schema: {type: string}}
+    get:
+      summary: 예약 단건 조회
+      operationId: getBooking
+      responses:
+        "200":
+          description: 예약 정보
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Booking"}
+        "404": {description: 예약을 찾을 수 없음}
+    put:
+      summary: 예약 수정
+      operationId: updateBooking
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/BookingInput"}
+      responses:
+        "200":
+          description: 수정된 예약
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Booking"}
+    delete:
+      summary: 예약 취소
+      operationId: deleteBooking
+      responses:
+        "200": {description: 취소 완료}
+
+components:
+  schemas:
+    Cruise:
+      type: object
+      properties:
+        cruiseID:  {type: string}
+        name:      {type: string}
+        startPort: {type: string}
+        endPort:   {type: string}
+        startDate: {type: string, format: date}
+        endDate:   {type: string, format: date}
+        numDays:   {type: integer}
+        price:     {type: number}
+    Customer:
+      type: object
+      properties:
+        customerID:   {type: string}
+        firstName:    {type: string}
+        lastName:     {type: string}
+        emailAddress: {type: string, format: email}
+        phoneNumber:  {type: string}
+    CustomerInput:
+      type: object
+      required: [firstName, lastName, emailAddress]
+      properties:
+        firstName:    {type: string}
+        lastName:     {type: string}
+        emailAddress: {type: string, format: email}
+        phoneNumber:  {type: string}
+    Booking:
+      type: object
+      properties:
+        bookingID:     {type: string}
+        cruiseID:      {type: string}
+        customerID:    {type: string}
+        numPassengers: {type: integer}
+        totalPrice:    {type: number}
+        status:        {type: string, enum: [confirmed, cancelled]}
+    BookingInput:
+      type: object
+      required: [cruiseID, customerID]
+      properties:
+        cruiseID:      {type: string}
+        customerID:    {type: string}
+        numPassengers: {type: integer, default: 1}

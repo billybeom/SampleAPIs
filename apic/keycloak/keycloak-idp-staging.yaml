@@ -1,0 +1,120 @@
+# =============================================================================
+# IBM API Connect 12.1.1.2 — Keycloak 3rd Party IdP 연동 구성 (스테이징 환경)
+#
+# 파일 목적:
+#   - OIDC User Registry: API Manager UI 로그인에 Keycloak 계정 사용
+#   - Third-Party OAuth Provider: DataPower Gateway에서 Keycloak 토큰 검증
+#
+# Keycloak 버전: 21.x 이상
+# 환경: 스테이징 (staging)
+# Realm: staging-corp
+#
+# 개발(dev) 대비 변경 사항:
+#   - TLS 검증 활성화 (tls_profile_url 지정)
+#   - introspect_cache_type: time-to-live (TTL 60초)
+#   - pkce_required: true (Authorization Code Flow 보안 강화)
+#   - implicit grant 제거 (스테이징부터 비활성화)
+#   - 전용 Keycloak Realm: staging-corp
+#
+# 적용 방법:
+#   apic login --server mgmt.staging.example.com --username admin --password ${ADMIN_PASSWORD} --realm admin/default-idp-1
+#   apic user-registries:create --server mgmt.staging.example.com --org admin --yaml keycloak-idp-staging.yaml
+#   apic oauth-providers:create   --server mgmt.staging.example.com --org admin --yaml keycloak-idp-staging.yaml
+# =============================================================================
+
+---
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. OIDC User Registry (스테이징)
+# ─────────────────────────────────────────────────────────────────────────────
+type: user_registry
+api_version: user_registry/1.0.0
+
+title: Keycloak OIDC Registry (STAGING)
+name: keycloak-oidc-staging
+
+integration_url: "https://mgmt.staging.example.com/api/cloud/integrations/user-registry/oidc"
+
+email_required: true
+email_unique_if_exists: true
+case_sensitive: false
+org: admin
+
+configuration:
+  client_id: apic-staging
+  client_secret: "${KEYCLOAK_CLIENT_SECRET_STAGING}"
+  provider_type: standard
+
+  authorization_endpoint: "https://keycloak.staging.example.com/realms/staging-corp/protocol/openid-connect/auth"
+
+  token_endpoint:
+    endpoint: "https://keycloak.staging.example.com/realms/staging-corp/protocol/openid-connect/token"
+
+  userinfo_endpoint: "https://keycloak.staging.example.com/realms/staging-corp/protocol/openid-connect/userinfo"
+
+  jwks_url: "https://keycloak.staging.example.com/realms/staging-corp/protocol/openid-connect/certs"
+
+  scopes:
+    - openid
+    - profile
+    - email
+
+  username_claim: preferred_username
+
+  # 스테이징: 유효한 TLS 인증서 프로파일 지정 (Let's Encrypt 또는 사내 CA)
+  tls_client_profile_url: "https://mgmt.staging.example.com/api/orgs/admin/tls-client-profiles/keycloak-staging-tls"
+
+---
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. Third-Party OAuth Provider (스테이징)
+# ─────────────────────────────────────────────────────────────────────────────
+type: oauth_provider
+api_version: oauth_provider/2.0.0
+
+title: Keycloak OAuth2 Provider (STAGING)
+name: keycloak-oauth-staging
+
+provider_type: third_party
+
+authorization_url: "https://keycloak.staging.example.com/realms/staging-corp/protocol/openid-connect/auth"
+token_url:         "https://keycloak.staging.example.com/realms/staging-corp/protocol/openid-connect/token"
+introspect_url:    "https://keycloak.staging.example.com/realms/staging-corp/protocol/openid-connect/token/introspect"
+
+# 스테이징: TTL 60초 캐시 — Keycloak 부하 감소 + 거의 실시간 반영
+introspect_cache_type: time-to-live
+introspect_cache_ttl: 60
+
+introspect_client_id: apic-staging
+introspect_client_secret: "${KEYCLOAK_CLIENT_SECRET_STAGING}"
+
+# 스테이징: implicit grant 제거, PKCE 강제
+grant_types:
+  - authorization_code
+  - client_credentials
+  - password              # 부하 테스트 자동화 전용 (스테이징 한정)
+
+scopes:
+  openid:
+    description: "OpenID Connect 기본 스코프 — 사용자 식별"
+  profile:
+    description: "사용자 프로필 정보"
+  email:
+    description: "이메일 주소"
+  salary:read:
+    description: "연봉 정보 조회"
+  salary:write:
+    description: "연봉 정보 수정 (manager/hr 역할 필요)"
+  library:read:
+    description: "도서관 API 조회"
+  tours:read:
+    description: "여행 패키지 조회"
+  tours:book:
+    description: "여행 예약"
+
+# 스테이징: TLS 프로파일 활성화
+tls_profile_url: "https://mgmt.staging.example.com/api/orgs/admin/tls-client-profiles/keycloak-staging-tls"
+
+# 스테이징부터 PKCE 강제 (Authorization Code Flow 보안 강화)
+pkce_required: true
+pkce_support_plain: false   # S256만 허용
+
+id_token_enabled: false

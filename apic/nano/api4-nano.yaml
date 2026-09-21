@@ -1,0 +1,164 @@
+# =============================================================================
+# IBM API Connect — DataPower Nano Gateway
+# API 4: GraphQL Product API (Apollo Server v4, 포트 4000)
+# ⚠️  OAS 3.0 전용
+#
+# Nano Gateway의 GraphQL 처리:
+#   - DataPower의 GatewayScript 대신 LuaScript 사용
+#   - 쿼리 깊이 검증은 LuaScript로 구현
+#   - CircuitBreaker 정책으로 장애 격리 (Nano 전용)
+# =============================================================================
+
+openapi: "3.0.3"
+info:
+  title: GraphQL Product API
+  description: |
+    GraphQL 기반 제품 카탈로그 API — Nano Gateway 샘플
+    백엔드: http://graphql-api:4000
+    단일 엔드포인트: POST /graphql
+  version: "1.0.0"
+  x-ibm-name: graphql-product-api-nano
+
+servers:
+  - url: https://nano-gateway.example.com/graphql/v1
+
+x-ibm-configuration:
+  testable: true
+  enforced: true
+  phase: realized
+  gateway: datapower-nano-gateway
+
+  assembly:
+    execute:
+      # ── 1단계: RateLimit ──────────────────────────────────────────────
+      - RateLimit:
+          version: 2.0.0
+          title: Rate Limit
+          count: 100
+          interval: 60
+          unit: second
+          hard-limit: true
+          reject-message: 요청 한도를 초과했습니다.
+
+      # ── 2단계: Parse ──────────────────────────────────────────────────
+      - Parse:
+          version: 2.0.0
+          title: Parse GraphQL Request
+
+      # ── 3단계: Cors ─────────────────────────────────────────────────
+      - Cors:
+          version: 2.0.0
+          title: CORS Policy
+          allow-origins: ["*"]
+          allow-methods: [POST, OPTIONS]
+          allow-headers: [Content-Type, X-Request-ID]
+          max-age: 3600
+
+      # ── 4단계: LuaScript — GraphQL 쿼리 깊이 검증 ────────────────────
+      # DataPower의 GatewayScript에 해당하는 Nano 전용 스크립팅 정책
+      - LuaScript:
+          version: 2.0.0
+          title: Validate GraphQL Query Depth
+          source: |
+            -- Nano LuaScript: GraphQL 쿼리 깊이 검증
+            local body = context.request.body
+            if body and body.query then
+              local depth = 0
+              local max_depth = 0
+              for char in body.query:gmatch(".") do
+                if char == "{" then
+                  depth = depth + 1
+                  if depth > max_depth then max_depth = depth end
+                elseif char == "}" then
+                  depth = depth - 1
+                end
+              end
+              if max_depth > 5 then
+                context.response.status_code = 400
+                context.response.body = '{"errors":[{"message":"GraphQL 쿼리 깊이가 최대치(5)를 초과합니다."}]}'
+                context.flow.abort()
+              end
+            end
+
+      # ── 5단계: CircuitBreaker (Nano 전용 — DataPower에 없음) ─────────
+      # 백엔드 장애 감지 시 자동으로 fallback 응답 반환
+      - CircuitBreaker:
+          version: 2.0.0
+          title: Backend Circuit Breaker
+          threshold: 5             # 5회 실패 시 회로 개방
+          timeout: 30              # 30초 후 half-open 전환
+          fallback:
+            - Set:
+                version: 2.0.0
+                title: Circuit Open Response
+                status-code: 503
+                body: '{"errors":[{"message":"GraphQL 서비스가 일시적으로 사용 불가능합니다."}]}'
+
+      # ── 6단계: Set (헤더 주입) ─────────────────────────────────────
+      - Set:
+          version: 2.0.0
+          title: Set GraphQL Headers
+          headers:
+            X-API-Gateway: "IBM-Nano-Gateway"
+            Content-Type: "application/json"
+
+      # ── 7단계: Invoke ─────────────────────────────────────────────────
+      - Invoke:
+          version: 2.0.0
+          title: Invoke GraphQL Backend
+          url: "http://graphql-api:4000/graphql"
+          verb: POST
+          timeout: 30
+          redirect-policy: follow
+
+    catch:
+      - errors: [ConnectionError]
+        execute:
+          - Set:
+              version: 2.0.0
+              title: Error Response
+              status-code: 503
+              body: '{"errors":[{"message":"백엔드 GraphQL 서비스에 연결할 수 없습니다."}]}'
+
+paths:
+  /graphql:
+    post:
+      summary: GraphQL 쿼리/뮤테이션 실행
+      operationId: executeGraphQL
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/GraphQLRequest"}
+            examples:
+              listProducts:
+                summary: 제품 목록
+                value:
+                  query: "{ products { id name price } }"
+              getProduct:
+                summary: 단건 조회
+                value:
+                  query: "query($id: ID!) { product(id: $id) { id name price } }"
+                  variables: {id: "1"}
+      responses:
+        "200":
+          description: GraphQL 실행 결과
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/GraphQLResponse"}
+        "400": {description: 쿼리 깊이 초과 또는 파싱 오류}
+
+components:
+  schemas:
+    GraphQLRequest:
+      type: object
+      required: [query]
+      properties:
+        query:         {type: string}
+        variables:     {type: object, nullable: true}
+        operationName: {type: string, nullable: true}
+    GraphQLResponse:
+      type: object
+      properties:
+        data:   {type: object, nullable: true}
+        errors: {type: array, nullable: true, items: {type: object}}

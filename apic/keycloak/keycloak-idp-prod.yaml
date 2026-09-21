@@ -1,0 +1,130 @@
+# =============================================================================
+# IBM API Connect 12.1.1.2 — Keycloak 3rd Party IdP 연동 구성 (운영 환경)
+#
+# 파일 목적:
+#   - OIDC User Registry: API Manager UI 로그인에 Keycloak 계정 사용
+#   - Third-Party OAuth Provider: DataPower Gateway에서 Keycloak 토큰 검증
+#
+# Keycloak 버전: 21.x 이상
+# 환경: 운영 (production)
+# Realm: corp
+#
+# 스테이징(staging) 대비 변경 사항:
+#   - introspect_cache_type: time-to-live (TTL 300초) — 운영 성능 최적화
+#   - password grant 완전 제거 (보안 규정 준수)
+#   - 전용 운영 Keycloak HA 클러스터 엔드포인트 사용
+#   - rate_limit 더욱 강화된 TLS 프로파일 (운영 CA 서명 인증서)
+#   - email_unique_if_exists: true 유지 (계정 탈취 방지)
+#
+# ⚠️ 운영 배포 체크리스트:
+#   □ KEYCLOAK_CLIENT_SECRET_PROD 는 반드시 Kubernetes Secret / Vault에서 주입
+#   □ Keycloak HA 클러스터 앞단 Load Balancer URL 확인
+#   □ TLS 인증서 만료일 확인 (90일 전 갱신)
+#   □ API Manager ↔ Keycloak 간 mTLS 구성 검토
+#   □ introspect_cache_ttl 값은 Keycloak 토큰 TTL보다 짧게 설정
+#
+# 적용 방법:
+#   apic login --server mgmt.prod.example.com --username admin --password ${ADMIN_PASSWORD} --realm admin/default-idp-1
+#   apic user-registries:create --server mgmt.prod.example.com --org admin --yaml keycloak-idp-prod.yaml
+#   apic oauth-providers:create   --server mgmt.prod.example.com --org admin --yaml keycloak-idp-prod.yaml
+# =============================================================================
+
+---
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. OIDC User Registry (운영)
+# ─────────────────────────────────────────────────────────────────────────────
+type: user_registry
+api_version: user_registry/1.0.0
+
+title: Keycloak OIDC Registry (PROD)
+name: keycloak-oidc-prod
+
+integration_url: "https://mgmt.prod.example.com/api/cloud/integrations/user-registry/oidc"
+
+email_required: true
+email_unique_if_exists: true
+case_sensitive: false
+org: admin
+
+configuration:
+  client_id: apic-prod
+  # ⚠️ 반드시 Kubernetes Secret 또는 Vault에서 주입 — YAML에 평문 저장 금지
+  client_secret: "${KEYCLOAK_CLIENT_SECRET_PROD}"
+  provider_type: standard
+
+  # Keycloak HA 클러스터 엔드포인트 (운영은 도메인 기반 라우팅)
+  authorization_endpoint: "https://auth.example.com/realms/corp/protocol/openid-connect/auth"
+
+  token_endpoint:
+    endpoint: "https://auth.example.com/realms/corp/protocol/openid-connect/token"
+
+  userinfo_endpoint: "https://auth.example.com/realms/corp/protocol/openid-connect/userinfo"
+
+  # RS256 서명 검증 JWKS (운영 Keycloak은 키 롤오버 주기: 30일)
+  jwks_url: "https://auth.example.com/realms/corp/protocol/openid-connect/certs"
+
+  scopes:
+    - openid
+    - profile
+    - email
+
+  username_claim: preferred_username
+
+  # 운영: 사내 CA 또는 공인 CA 서명 인증서 TLS 프로파일 필수
+  tls_client_profile_url: "https://mgmt.prod.example.com/api/orgs/admin/tls-client-profiles/keycloak-prod-tls"
+
+---
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. Third-Party OAuth Provider (운영)
+# ─────────────────────────────────────────────────────────────────────────────
+type: oauth_provider
+api_version: oauth_provider/2.0.0
+
+title: Keycloak OAuth2 Provider (PROD)
+name: keycloak-oauth-prod
+
+provider_type: third_party
+
+authorization_url: "https://auth.example.com/realms/corp/protocol/openid-connect/auth"
+token_url:         "https://auth.example.com/realms/corp/protocol/openid-connect/token"
+introspect_url:    "https://auth.example.com/realms/corp/protocol/openid-connect/token/introspect"
+
+# 운영: 300초 TTL 캐시 — Keycloak 인트로스펙션 호출 최소화
+# ※ Keycloak Access Token TTL(기본 300초)보다 짧거나 같게 설정
+introspect_cache_type: time-to-live
+introspect_cache_ttl: 300
+
+introspect_client_id: apic-prod
+introspect_client_secret: "${KEYCLOAK_CLIENT_SECRET_PROD}"
+
+# 운영: password grant 완전 제거 (보안 규정 준수)
+grant_types:
+  - authorization_code   # PKCE 필수 (아래 pkce_required: true)
+  - client_credentials   # M2M / 서비스 계정
+
+scopes:
+  openid:
+    description: "OpenID Connect 기본 스코프 — 사용자 식별"
+  profile:
+    description: "사용자 프로필 정보"
+  email:
+    description: "이메일 주소"
+  salary:read:
+    description: "연봉 정보 조회"
+  salary:write:
+    description: "연봉 정보 수정 (manager/hr 역할 필요)"
+  library:read:
+    description: "도서관 API 조회"
+  tours:read:
+    description: "여행 패키지 조회"
+  tours:book:
+    description: "여행 예약"
+
+# 운영: 공인 CA 서명 TLS 프로파일
+tls_profile_url: "https://mgmt.prod.example.com/api/orgs/admin/tls-client-profiles/keycloak-prod-tls"
+
+# 운영: PKCE 필수 — S256 알고리즘만 허용
+pkce_required: true
+pkce_support_plain: false
+
+id_token_enabled: false

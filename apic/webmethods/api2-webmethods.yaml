@@ -1,0 +1,503 @@
+# =============================================================================
+# IBM API Connect — webMethods API Gateway
+# API 2: Salary Management API (Keycloak OAuth2 + RBAC)
+#
+# webMethods의 인증/인가 처리 방식:
+#   - identify-and-authorize 정책: OAuth/JWT 토큰 검증 (DataPower oauth 정책에 해당)
+#   - set-authorization 정책: Outbound 인증 헤더 설정
+#   - authorize-user 정책: 역할 기반 접근 제어
+#
+# DataPower와의 주요 차이:
+#   ┌────────────────────────────────┬─────────────────────────────────────┐
+#   │ DataPower                      │ webMethods API Gateway              │
+#   ├────────────────────────────────┼─────────────────────────────────────┤
+#   │ oauth(provider: keycloak-corp) │ identify-and-authorize (OAuth2/JWT) │
+#   │ set-variable (헤더 복사)       │ set-authorization (outbound 설정)   │
+#   │ parse (위협 탐지)              │ validate-api-specification          │
+#   │ catch (ConnectionError)        │ conditional-error-processing        │
+#   └────────────────────────────────┴─────────────────────────────────────┘
+# =============================================================================
+
+# =====================================================================
+# --- Swagger 2.0 명세 ---
+# =====================================================================
+swagger: "2.0"
+info:
+  title: Salary Management API
+  description: |
+    연봉 관리 API — Keycloak OAuth2/OIDC + webMethods API Gateway RBAC 샘플
+    백엔드: http://salary-api:8001
+    역할: employee / manager / hr_system
+  version: "2.0.0"
+  x-ibm-name: salary-management-api-wm
+
+basePath: /salary/v2
+schemes:
+  - https
+consumes:
+  - application/json
+produces:
+  - application/json
+
+securityDefinitions:
+  keycloak-oauth2:
+    type: oauth2
+    description: Keycloak OAuth 2.0 (corp realm) — webMethods identify-and-authorize 연동
+    flow: application
+    tokenUrl: https://keycloak.example.com/realms/corp/protocol/openid-connect/token
+    scopes:
+      openid:  OpenID 기본 스코프
+      profile: 사용자 프로필
+      email:   이메일 주소
+
+security:
+  - keycloak-oauth2: [openid, profile]
+
+x-ibm-configuration:
+  testable: true
+  enforced: true
+  phase: realized
+  gateway: webmethods-api-gateway
+
+  assembly:
+    execute:
+      # ── 1단계: Rate Limiter ────────────────────────────────────────────
+      - rate-limiter:
+          version: 2.0.0
+          title: Rate Limiter
+          rate:
+            count: 60
+            interval: 60         # 분당 60회 (민감 데이터 API)
+          burst:
+            count: 10
+            interval: 1
+          reject-message: 요청 한도를 초과했습니다.
+
+      # ── 2단계: Validate API Specification ─────────────────────────────
+      # DataPower의 parse 정책에 해당 (요청 스키마 검증)
+      - validate-api-specification:
+          version: 2.0.0
+          title: Validate Request Schema
+          validate:
+            - request-body
+            - request-headers
+          on-error: reject   # 검증 실패 시 400 반환
+
+      # ── 3단계: Identify and Authorize (webMethods 전용) ───────────────
+      # DataPower의 oauth 정책에 해당
+      # webMethods는 identify-and-authorize 단일 정책으로 인증+인가를 처리
+      - identify-and-authorize:
+          version: 2.0.0
+          title: Keycloak OAuth2 검증
+          auth-type: oauth2
+          # OAuth2 Provider 설정 (webMethods API Gateway에 등록 필요)
+          provider: keycloak-corp
+          token-type: bearer
+          # 토큰에서 역할 클레임 추출
+          extract-claims:
+            - claim: realm_access.roles
+              variable: user-roles
+            - claim: sub
+              variable: user-sub
+            - claim: department
+              variable: user-department
+          # 검증 방법: introspect (Keycloak Introspect 엔드포인트 호출)
+          validation-method: introspect
+          introspect-url: http://keycloak:8080/realms/corp/protocol/openid-connect/token/introspect
+
+      # ── 4단계: Set Authorization (Outbound 헤더 설정) ─────────────────
+      # DataPower의 set-variable(Authorization 복사)에 해당
+      # webMethods는 set-authorization으로 명시적으로 outbound 인증 설정
+      - set-authorization:
+          version: 2.0.0
+          title: Forward Bearer Token
+          type: pass-through   # 클라이언트 토큰을 백엔드로 그대로 전달
+          # 추출한 클레임을 커스텀 헤더로 전달 (백엔드에서 활용 가능)
+          custom-headers:
+            - name: X-User-Sub
+              value: $(user-sub)
+            - name: X-User-Department
+              value: $(user-department)
+
+      # ── 5단계: Request Transformation (식별 헤더 주입) ────────────────
+      - request-transformation:
+          version: 2.0.0
+          title: Inject Gateway Headers
+          transformations:
+            - {type: set-header, name: X-API-Gateway, value: IBM-webMethods-API-Gateway}
+            - {type: set-header, name: X-Request-ID,  value: $(request.headers.x-request-id)}
+
+      # ── 6단계: Invoke ──────────────────────────────────────────────────
+      - invoke:
+          version: 2.0.0
+          title: Invoke Salary Backend
+          url: http://salary-api:8001$(request.path)$(request.search)
+          verb: keep
+          timeout: 30
+          forward-response: true
+
+      # ── 7단계: Log ────────────────────────────────────────────────────
+      - log:
+          version: 2.0.0
+          title: Audit Log
+          log-level: info
+          destination: api-gateway-log
+          include:
+            - request-headers
+            - response-status-code
+
+    catch:
+      - errors: [ConnectionError, AuthenticationError]
+        execute:
+          - conditional-error-processing:
+              version: 2.0.0
+              title: Error Handler
+              conditions:
+                - condition: $(error.name) == 'ConnectionError'
+                  execute:
+                    - response-transformation:
+                        version: 2.0.0
+                        title: Service Unavailable
+                        status-code: 503
+                        body: '{"detail":"백엔드 서비스에 연결할 수 없습니다."}'
+                - condition: $(error.name) == 'AuthenticationError'
+                  execute:
+                    - response-transformation:
+                        version: 2.0.0
+                        title: Unauthorized
+                        status-code: 401
+                        body: '{"detail":"인증에 실패했습니다. 유효한 토큰을 제공하세요."}'
+
+  cors:
+    enabled: true
+
+paths:
+  /health:
+    get:
+      summary: 헬스 체크
+      operationId: health
+      security: []
+      responses:
+        "200": {description: 정상}
+
+  /auth/me:
+    get:
+      summary: 현재 인증된 사용자 정보
+      operationId: getMe
+      responses:
+        "200": {description: 사용자 정보}
+        "401": {description: 인증 실패}
+
+  /salaries/me:
+    get:
+      summary: 내 연봉 조회
+      operationId: getMySalary
+      responses:
+        "200": {description: 내 연봉 정보}
+        "401": {description: 인증 실패}
+        "404": {description: 연봉 정보 없음}
+    put:
+      summary: 내 연봉 수정
+      operationId: updateMySalary
+      parameters:
+        - {in: body, name: body, schema: {$ref: "#/definitions/SalaryUpdate"}}
+      responses:
+        "200": {description: 수정된 연봉}
+        "403": {description: 권한 없음}
+
+  /salaries/team:
+    get:
+      summary: 팀 연봉 목록 (manager/hr_system)
+      operationId: getTeamSalaries
+      responses:
+        "200": {description: 팀 연봉 목록}
+        "403": {description: 권한 없음}
+
+  /salaries:
+    get:
+      summary: 전체 연봉 목록 (hr_system)
+      operationId: getAllSalaries
+      responses:
+        "200": {description: 전체 연봉 목록}
+        "403": {description: 권한 없음}
+
+  /salaries/{employee_id}:
+    parameters:
+      - {name: employee_id, in: path, required: true, type: string}
+    get:
+      summary: 특정 직원 연봉 조회
+      operationId: getSalary
+      responses:
+        "200": {description: 연봉 정보}
+        "403": {description: 권한 없음}
+        "404": {description: 연봉 정보 없음}
+    put:
+      summary: 특정 직원 연봉 수정
+      operationId: updateSalary
+      parameters:
+        - {in: body, name: body, schema: {$ref: "#/definitions/SalaryUpdate"}}
+      responses:
+        "200": {description: 수정된 연봉}
+        "403": {description: 권한 없음}
+    delete:
+      summary: 연봉 레코드 삭제 (hr_system)
+      operationId: deleteSalary
+      responses:
+        "204": {description: 삭제 완료}
+        "403": {description: 권한 없음}
+
+definitions:
+  SalaryUpdate:
+    type: object
+    properties:
+      base_salary: {type: integer}
+      bonus:       {type: integer}
+  SalaryRecord:
+    type: object
+    properties:
+      employee_id: {type: string}
+      name:        {type: string}
+      team:        {type: string}
+      base_salary: {type: integer}
+      bonus:       {type: integer}
+      currency:    {type: string}
+      updated_at:  {type: string, format: date-time}
+
+---
+# =====================================================================
+# --- OpenAPI 3.0 명세 ---
+# =====================================================================
+openapi: "3.0.3"
+info:
+  title: Salary Management API
+  description: |
+    연봉 관리 API — Keycloak OAuth2/OIDC + webMethods API Gateway RBAC 샘플
+    역할: employee / manager / hr_system
+  version: "2.0.0"
+  x-ibm-name: salary-management-api-wm-oas3
+
+servers:
+  - url: https://webmethods-gateway.example.com/salary/v2
+    description: webMethods API Gateway (운영)
+
+security:
+  - keycloak-oauth2: [openid, profile]
+
+x-ibm-configuration:
+  testable: true
+  enforced: true
+  phase: realized
+  gateway: webmethods-api-gateway
+
+  assembly:
+    execute:
+      - rate-limiter:
+          version: 2.0.0
+          title: Rate Limiter
+          rate: {count: 60, interval: 60}
+          burst: {count: 10, interval: 1}
+          reject-message: 요청 한도를 초과했습니다.
+      - validate-api-specification:
+          version: 2.0.0
+          title: Validate Request Schema
+          validate: [request-body, request-headers]
+          on-error: reject
+      - identify-and-authorize:
+          version: 2.0.0
+          title: Keycloak OAuth2 검증
+          auth-type: oauth2
+          provider: keycloak-corp
+          token-type: bearer
+          extract-claims:
+            - {claim: realm_access.roles, variable: user-roles}
+            - {claim: sub,                variable: user-sub}
+          validation-method: introspect
+          introspect-url: http://keycloak:8080/realms/corp/protocol/openid-connect/token/introspect
+      - set-authorization:
+          version: 2.0.0
+          title: Forward Bearer Token
+          type: pass-through
+          custom-headers:
+            - {name: X-User-Sub, value: $(user-sub)}
+      - request-transformation:
+          version: 2.0.0
+          title: Inject Gateway Headers
+          transformations:
+            - {type: set-header, name: X-API-Gateway, value: IBM-webMethods-API-Gateway}
+      - invoke:
+          version: 2.0.0
+          title: Invoke Salary Backend
+          url: http://salary-api:8001$(request.path)$(request.search)
+          verb: keep
+          timeout: 30
+          forward-response: true
+      - log:
+          version: 2.0.0
+          title: Audit Log
+          log-level: info
+          destination: api-gateway-log
+
+    catch:
+      - errors: [ConnectionError]
+        execute:
+          - response-transformation:
+              version: 2.0.0
+              title: Service Unavailable
+              status-code: 503
+              body: '{"detail":"백엔드 서비스에 연결할 수 없습니다."}'
+
+  cors:
+    enabled: true
+
+paths:
+  /health:
+    get:
+      summary: 헬스 체크
+      operationId: health
+      security: []
+      responses:
+        "200":
+          description: 정상
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/HealthResponse"}
+
+  /auth/me:
+    get:
+      summary: 현재 인증된 사용자 정보
+      operationId: getMe
+      responses:
+        "200":
+          description: 사용자 정보
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/UserInfo"}
+        "401": {description: 인증 실패}
+
+  /salaries/me:
+    get:
+      summary: 내 연봉 조회
+      operationId: getMySalary
+      responses:
+        "200":
+          description: 내 연봉 정보
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SalaryRecord"}
+        "401": {description: 인증 실패}
+    put:
+      summary: 내 연봉 수정
+      operationId: updateMySalary
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/SalaryUpdate"}
+      responses:
+        "200":
+          description: 수정된 연봉
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SalaryRecord"}
+        "403": {description: 권한 없음}
+
+  /salaries/team:
+    get:
+      summary: 팀 연봉 목록
+      operationId: getTeamSalaries
+      responses:
+        "200":
+          description: 팀 연봉 목록
+          content:
+            application/json:
+              schema: {type: array, items: {$ref: "#/components/schemas/SalaryRecord"}}
+        "403": {description: 권한 없음}
+
+  /salaries:
+    get:
+      summary: 전체 연봉 목록 (hr_system)
+      operationId: getAllSalaries
+      responses:
+        "200":
+          description: 전체 연봉 목록
+          content:
+            application/json:
+              schema: {type: array, items: {$ref: "#/components/schemas/SalaryRecord"}}
+        "403": {description: 권한 없음}
+
+  /salaries/{employee_id}:
+    parameters:
+      - {name: employee_id, in: path, required: true, schema: {type: string}}
+    get:
+      summary: 특정 직원 연봉 조회
+      operationId: getSalary
+      responses:
+        "200":
+          description: 연봉 정보
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SalaryRecord"}
+        "403": {description: 권한 없음}
+        "404": {description: 연봉 정보 없음}
+    put:
+      summary: 특정 직원 연봉 수정
+      operationId: updateSalary
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/SalaryUpdate"}
+      responses:
+        "200":
+          description: 수정된 연봉
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SalaryRecord"}
+        "403": {description: 권한 없음}
+    delete:
+      summary: 연봉 레코드 삭제
+      operationId: deleteSalary
+      responses:
+        "204": {description: 삭제 완료}
+        "403": {description: 권한 없음}
+
+components:
+  securitySchemes:
+    keycloak-oauth2:
+      type: oauth2
+      description: Keycloak OAuth 2.0 — webMethods identify-and-authorize 연동
+      flows:
+        clientCredentials:
+          tokenUrl: https://keycloak.example.com/realms/corp/protocol/openid-connect/token
+          scopes:
+            openid:  OpenID 기본 스코프
+            profile: 사용자 프로필
+  schemas:
+    SalaryRecord:
+      type: object
+      properties:
+        employee_id: {type: string}
+        name:        {type: string}
+        team:        {type: string}
+        base_salary: {type: integer}
+        bonus:       {type: integer}
+        currency:    {type: string}
+        updated_at:  {type: string, format: date-time}
+    SalaryUpdate:
+      type: object
+      properties:
+        base_salary: {type: integer}
+        bonus:       {type: integer}
+    UserInfo:
+      type: object
+      properties:
+        id:       {type: string}
+        username: {type: string}
+        email:    {type: string}
+        role:     {type: string, enum: [employee, manager, hr_system]}
+        team:     {type: string}
+    HealthResponse:
+      type: object
+      properties:
+        status:    {type: string}
+        timestamp: {type: string, format: date-time}

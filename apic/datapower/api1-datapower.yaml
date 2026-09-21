@@ -1,0 +1,454 @@
+# =============================================================================
+# IBM API Connect — DataPower API Gateway
+# API 1: Library Management API (인증 없음, 직관적 CRUD)
+#
+# 이 파일은 Swagger 2.0 명세와 OpenAPI 3.0 명세를 함께 포함합니다.
+# DataPower API Gateway에 import 할 때는 두 명세 중 하나를 선택하여 사용하세요.
+#
+# Assembly 정책 흐름:
+#   1. rate-limit   : 호출 횟수 제한 (분당 100회)
+#   2. set-variable : 요청 식별 헤더 주입
+#   3. invoke       : 백엔드 Library API 호출
+# =============================================================================
+
+# =====================================================================
+# --- Swagger 2.0 명세 ---
+# =====================================================================
+swagger: "2.0"
+info:
+  title: Library Management API
+  description: |
+    도서관 도서/대출 관리 REST API — DataPower API Gateway 샘플 (인증 없음)
+    백엔드: http://library-api:3000
+  version: "1.0.0"
+  x-ibm-name: library-management-api-dp
+
+basePath: /library/v1
+schemes:
+  - https
+consumes:
+  - application/json
+produces:
+  - application/json
+
+security: []
+securityDefinitions: {}
+
+x-ibm-configuration:
+  testable: true
+  enforced: true
+  phase: realized
+  gateway: datapower-api-gateway
+
+  assembly:
+    execute:
+      # ── 1단계: Rate Limit (DataPower 전용 rate-limit 정책) ─────────────
+      - rate-limit:
+          version: 2.0.0
+          title: Rate Limit
+          source: plan          # Plan 에서 설정한 Rate Limit 적용
+          reject-message: 요청 한도를 초과했습니다. 잠시 후 다시 시도하세요.
+
+      # ── 2단계: Set Variable (요청 식별 헤더 주입) ──────────────────────
+      - set-variable:
+          version: 2.0.0
+          title: Set Gateway Headers
+          actions:
+            - set: message.headers.X-API-Gateway
+              value: IBM-DataPower-API-Gateway
+              type: string
+            - set: message.headers.X-Request-ID
+              value: $(request.headers.x-request-id)
+              type: string
+            - set: message.headers.X-Forwarded-For
+              value: $(request.headers.x-forwarded-for)
+              type: string
+            - set: message.headers.X-Gateway-Timestamp
+              value: $(local.datetime)
+              type: string
+
+      # ── 3단계: Invoke (백엔드 호출) ────────────────────────────────────
+      - invoke:
+          version: 2.2.0
+          title: Invoke Library Backend
+          target-url: $(target-url)$(request.path)$(request.search)
+          verb: keep
+          follow-redirects: false
+          timeout: 30
+          compression: false
+          output: message
+          header-control:
+            type: blocklist
+            values:
+              - X-Client-Secret
+          parameter-control:
+            type: allowlist
+            values: []
+
+    catch:
+      - errors:
+          - ConnectionError
+        execute:
+          - set-variable:
+              version: 2.0.0
+              title: Backend Unavailable
+              actions:
+                - set: message.status.code
+                  value: 503
+                  type: number
+                - set: message.body
+                  value: '{"error":"백엔드 서비스에 연결할 수 없습니다."}'
+                  type: string
+
+  properties:
+    target-url:
+      value: http://library-api:3000
+      description: 백엔드 Library API URL (카탈로그별로 재정의 가능)
+      encoded: false
+
+  cors:
+    enabled: true
+
+paths:
+  /books:
+    get:
+      summary: 도서 목록 조회
+      operationId: listBooks
+      parameters:
+        - {name: genre,     in: query, type: string}
+        - {name: available, in: query, type: boolean}
+        - {name: page,      in: query, type: integer, default: 1}
+        - {name: limit,     in: query, type: integer, default: 10}
+      responses:
+        "200": {description: 도서 목록}
+    post:
+      summary: 도서 등록
+      operationId: createBook
+      parameters:
+        - {in: body, name: body, schema: {$ref: "#/definitions/BookInput"}}
+      responses:
+        "201": {description: 등록된 도서}
+
+  /books/{id}:
+    parameters:
+      - {name: id, in: path, required: true, type: string}
+    get:
+      summary: 도서 단건 조회
+      operationId: getBook
+      responses:
+        "200": {description: 도서 정보}
+        "404": {description: 도서를 찾을 수 없음}
+    put:
+      summary: 도서 전체 수정
+      operationId: replaceBook
+      parameters:
+        - {in: body, name: body, schema: {$ref: "#/definitions/BookInput"}}
+      responses:
+        "200": {description: 수정된 도서}
+    patch:
+      summary: 도서 부분 수정
+      operationId: updateBook
+      parameters:
+        - {in: body, name: body, schema: {$ref: "#/definitions/BookInput"}}
+      responses:
+        "200": {description: 수정된 도서}
+    delete:
+      summary: 도서 삭제
+      operationId: deleteBook
+      responses:
+        "204": {description: 삭제 완료}
+
+  /loans:
+    get:
+      summary: 대출 목록 조회
+      operationId: listLoans
+      parameters:
+        - {name: status, in: query, type: string, enum: [active, returned]}
+        - {name: bookId, in: query, type: string}
+      responses:
+        "200": {description: 대출 목록}
+    post:
+      summary: 도서 대출
+      operationId: createLoan
+      parameters:
+        - {in: body, name: body, schema: {$ref: "#/definitions/LoanInput"}}
+      responses:
+        "201": {description: 대출 정보}
+
+  /loans/{id}/return:
+    patch:
+      summary: 도서 반납
+      operationId: returnLoan
+      parameters:
+        - {name: id, in: path, required: true, type: string}
+      responses:
+        "200": {description: 반납 완료}
+
+definitions:
+  BookInput:
+    type: object
+    properties:
+      title:        {type: string}
+      author:       {type: string}
+      isbn:         {type: string}
+      genre:        {type: string}
+      publishedYear:{type: integer}
+      stock:        {type: integer}
+  LoanInput:
+    type: object
+    required: [bookId, borrowerName, borrowerEmail]
+    properties:
+      bookId:        {type: string}
+      borrowerName:  {type: string}
+      borrowerEmail: {type: string, format: email}
+      daysToLoan:    {type: integer, default: 14}
+
+---
+# =====================================================================
+# --- OpenAPI 3.0 명세 ---
+# Swagger 2.0과의 주요 차이점:
+#   - swagger: "2.0"  →  openapi: "3.0.3"
+#   - host + basePath →  servers[].url
+#   - definitions     →  components/schemas
+#   - securityDefinitions → components/securitySchemes
+#   - in:body 파라미터  →  requestBody
+# =====================================================================
+openapi: "3.0.3"
+info:
+  title: Library Management API
+  description: |
+    도서관 도서/대출 관리 REST API — DataPower API Gateway 샘플 (인증 없음)
+    백엔드: http://library-api:3000
+  version: "1.0.0"
+  x-ibm-name: library-management-api-dp-oas3
+
+servers:
+  - url: https://gateway.example.com/library/v1
+    description: DataPower API Gateway (운영)
+  - url: https://gateway-dev.example.com/library/v1
+    description: DataPower API Gateway (개발)
+
+x-ibm-configuration:
+  testable: true
+  enforced: true
+  phase: realized
+  gateway: datapower-api-gateway
+
+  assembly:
+    execute:
+      - rate-limit:
+          version: 2.0.0
+          title: Rate Limit
+          source: plan
+          reject-message: 요청 한도를 초과했습니다. 잠시 후 다시 시도하세요.
+      - set-variable:
+          version: 2.0.0
+          title: Set Gateway Headers
+          actions:
+            - set: message.headers.X-API-Gateway
+              value: IBM-DataPower-API-Gateway
+              type: string
+            - set: message.headers.X-Request-ID
+              value: $(request.headers.x-request-id)
+              type: string
+      - invoke:
+          version: 2.2.0
+          title: Invoke Library Backend
+          target-url: $(target-url)$(request.path)$(request.search)
+          verb: keep
+          follow-redirects: false
+          timeout: 30
+          output: message
+
+    catch:
+      - errors: [ConnectionError]
+        execute:
+          - set-variable:
+              version: 2.0.0
+              title: Backend Unavailable
+              actions:
+                - set: message.status.code
+                  value: 503
+                  type: number
+                - set: message.body
+                  value: '{"error":"백엔드 서비스에 연결할 수 없습니다."}'
+                  type: string
+
+  properties:
+    target-url:
+      value: http://library-api:3000
+      description: 백엔드 Library API URL
+      encoded: false
+
+  cors:
+    enabled: true
+
+paths:
+  /books:
+    get:
+      summary: 도서 목록 조회
+      operationId: listBooks
+      parameters:
+        - {name: genre,     in: query, schema: {type: string}}
+        - {name: available, in: query, schema: {type: boolean}}
+        - {name: page,      in: query, schema: {type: integer, default: 1}}
+        - {name: limit,     in: query, schema: {type: integer, default: 10}}
+      responses:
+        "200":
+          description: 도서 목록
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total: {type: integer}
+                  data:  {type: array, items: {$ref: "#/components/schemas/Book"}}
+    post:
+      summary: 도서 등록
+      operationId: createBook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/BookInput"}
+      responses:
+        "201":
+          description: 등록된 도서
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Book"}
+
+  /books/{id}:
+    parameters:
+      - {name: id, in: path, required: true, schema: {type: string}}
+    get:
+      summary: 도서 단건 조회
+      operationId: getBook
+      responses:
+        "200":
+          description: 도서 정보
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Book"}
+        "404": {description: 도서를 찾을 수 없음}
+    put:
+      summary: 도서 전체 수정
+      operationId: replaceBook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/BookInput"}
+      responses:
+        "200":
+          description: 수정된 도서
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Book"}
+    patch:
+      summary: 도서 부분 수정
+      operationId: updateBook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/BookInput"}
+      responses:
+        "200":
+          description: 수정된 도서
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Book"}
+    delete:
+      summary: 도서 삭제
+      operationId: deleteBook
+      responses:
+        "204": {description: 삭제 완료}
+
+  /loans:
+    get:
+      summary: 대출 목록 조회
+      operationId: listLoans
+      parameters:
+        - {name: status, in: query, schema: {type: string, enum: [active, returned]}}
+        - {name: bookId, in: query, schema: {type: string}}
+      responses:
+        "200":
+          description: 대출 목록
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total: {type: integer}
+                  data:  {type: array, items: {$ref: "#/components/schemas/Loan"}}
+    post:
+      summary: 도서 대출
+      operationId: createLoan
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/LoanInput"}
+      responses:
+        "201":
+          description: 대출 정보
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Loan"}
+
+  /loans/{id}/return:
+    patch:
+      summary: 도서 반납
+      operationId: returnLoan
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}}
+      responses:
+        "200":
+          description: 반납 완료
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Loan"}
+
+components:
+  schemas:
+    Book:
+      type: object
+      properties:
+        id:            {type: string}
+        title:         {type: string}
+        author:        {type: string}
+        isbn:          {type: string}
+        genre:         {type: string}
+        publishedYear: {type: integer}
+        available:     {type: boolean}
+        stock:         {type: integer}
+    BookInput:
+      type: object
+      required: [title, author, isbn]
+      properties:
+        title:         {type: string}
+        author:        {type: string}
+        isbn:          {type: string}
+        genre:         {type: string}
+        publishedYear: {type: integer}
+        stock:         {type: integer, default: 1}
+    Loan:
+      type: object
+      properties:
+        id:            {type: string}
+        bookId:        {type: string}
+        borrowerName:  {type: string}
+        borrowerEmail: {type: string, format: email}
+        loanDate:      {type: string, format: date}
+        dueDate:       {type: string, format: date}
+        returnDate:    {type: string, format: date, nullable: true}
+        status:        {type: string, enum: [active, returned]}
+    LoanInput:
+      type: object
+      required: [bookId, borrowerName, borrowerEmail]
+      properties:
+        bookId:        {type: string}
+        borrowerName:  {type: string}
+        borrowerEmail: {type: string, format: email}
+        daysToLoan:    {type: integer, default: 14}

@@ -1,0 +1,290 @@
+# =============================================================================
+# IBM API Connect — DataPower Nano Gateway
+# API 2: Salary Management API (Keycloak OAuth2 + RBAC)
+#
+# ⚠️  Nano Gateway는 OAS 3.0만 지원합니다.
+#
+# Nano의 OAuth2/인증 처리:
+#   - Authenticate 정책: 토큰 추출 (ExtractIdentity로 먼저 ID 추출)
+#   - Authorize 정책: 역할 기반 접근 제어
+#   - DataPower의 oauth + set-variable 조합과 달리
+#     Nano는 ExtractIdentity → Authenticate → Authorize 3단계로 처리
+#
+# Assembly 정책 흐름:
+#   1. RateLimit      : 분당 60회 제한
+#   2. Parse          : 페이로드 파싱
+#   3. Cors           : CORS 허용
+#   4. ExtractIdentity: Bearer 토큰 추출
+#   5. Authenticate   : Keycloak JWKS 검증
+#   6. Authorize      : 역할 확인
+#   7. Set            : Outbound 헤더 구성
+#   8. Invoke         : 백엔드 호출
+# =============================================================================
+
+openapi: "3.0.3"
+info:
+  title: Salary Management API
+  description: |
+    연봉 관리 API — Keycloak OAuth2/OIDC + Nano Gateway RBAC 샘플
+    역할: employee / manager / hr_system
+    Nano는 Third-Party OAuth Provider 방식으로 Keycloak 연동
+  version: "2.0.0"
+  x-ibm-name: salary-management-api-nano
+
+servers:
+  - url: https://nano-gateway.example.com/salary/v2
+    description: Nano Gateway (운영)
+
+security:
+  - bearerAuth: []
+
+x-ibm-configuration:
+  testable: true
+  enforced: true
+  phase: realized
+  gateway: datapower-nano-gateway
+
+  assembly:
+    execute:
+      # ── 1단계: RateLimit ──────────────────────────────────────────────
+      - RateLimit:
+          version: 2.0.0
+          title: Rate Limit
+          count: 60
+          interval: 60
+          unit: second
+          hard-limit: true
+          reject-message: 요청 한도(분당 60회)를 초과했습니다.
+
+      # ── 2단계: Parse (Nano 지원 정책) ──────────────────────────────────
+      - Parse:
+          version: 2.0.0
+          title: Parse Request Payload
+
+      # ── 3단계: Cors ─────────────────────────────────────────────────
+      - Cors:
+          version: 2.0.0
+          title: CORS Policy
+          allow-origins: ["*"]
+          allow-methods: [GET, POST, PUT, PATCH, DELETE, OPTIONS]
+          allow-headers: [Content-Type, Authorization, X-Request-ID]
+          max-age: 3600
+
+      # ── 4단계: ExtractIdentity (토큰 추출) ───────────────────────────
+      # DataPower의 oauth 정책과 달리 Nano는 단계를 분리합니다.
+      # ExtractIdentity → Authenticate → Authorize 순서
+      - ExtractIdentity:
+          version: 2.0.0
+          title: Extract Bearer Token
+          # Authorization 헤더에서 Bearer 토큰 추출
+          source: header
+          header-name: Authorization
+          strip-prefix: "Bearer "
+          output-variable: extracted-token
+
+      # ── 5단계: Authenticate (토큰 검증) ──────────────────────────────
+      # Nano에서 Keycloak JWKS로 토큰을 검증합니다.
+      # DataPower의 oauth(provider: keycloak-corp)에 해당
+      - Authenticate:
+          version: 2.0.0
+          title: Validate Keycloak JWT
+          # JWKS URI로 서명 검증
+          auth-type: jwt
+          jwt-validation:
+            jwks-uri: http://keycloak:8080/realms/corp/protocol/openid-connect/certs
+            issuer: http://keycloak:8080/realms/corp
+            audience: salary-api
+          # 검증 성공 시 클레임을 컨텍스트 변수에 저장
+          output: jwt-claims
+
+      # ── 6단계: Authorize (역할 확인) ─────────────────────────────────
+      # DataPower는 백엔드에서 RBAC 처리하지만
+      # Nano는 게이트웨이 레벨에서 기본 역할 확인 가능
+      - Authorize:
+          version: 2.0.0
+          title: Check Auth Claims
+          # jwt-claims에서 sub 클레임 확인 (인증된 사용자임을 보장)
+          claims:
+            - name: sub
+              required: true
+          # 역할별 세밀한 제어는 백엔드(Salary API)에서 수행
+
+      # ── 7단계: Set (헤더 구성) ───────────────────────────────────────
+      - Set:
+          version: 2.0.0
+          title: Set Outbound Headers
+          headers:
+            X-API-Gateway: "IBM-Nano-Gateway"
+            # Nano JSONata로 JWT sub 클레임 전달
+            X-User-Sub: "$jwt-claims.sub"
+
+      # ── 8단계: Invoke ─────────────────────────────────────────────────
+      - Invoke:
+          version: 2.0.0
+          title: Invoke Salary Backend
+          url: "http://salary-api:8001{$request.path}{$request.queryString ? '?' & $request.queryString : ''}"
+          verb: keep
+          timeout: 30
+          redirect-policy: follow
+          # Authorization 헤더를 백엔드로 포워딩
+          forward-headers:
+            - Authorization
+
+    catch:
+      - errors: [ConnectionError, AuthenticationError]
+        execute:
+          - Set:
+              version: 2.0.0
+              title: Error Response
+              status-code: 503
+              body: '{"detail":"서비스에 연결할 수 없습니다."}'
+
+paths:
+  /health:
+    get:
+      summary: 헬스 체크
+      operationId: health
+      security: []
+      responses:
+        "200":
+          description: 정상
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/HealthResponse"}
+
+  /auth/me:
+    get:
+      summary: 현재 인증된 사용자 정보
+      operationId: getMe
+      responses:
+        "200":
+          description: 사용자 정보
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/UserInfo"}
+        "401": {description: 인증 실패}
+
+  /salaries/me:
+    get:
+      summary: 내 연봉 조회
+      operationId: getMySalary
+      responses:
+        "200":
+          description: 내 연봉 정보
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SalaryRecord"}
+        "401": {description: 인증 실패}
+        "404": {description: 연봉 정보 없음}
+    put:
+      summary: 내 연봉 수정
+      operationId: updateMySalary
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/SalaryUpdate"}
+      responses:
+        "200":
+          description: 수정된 연봉
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SalaryRecord"}
+        "403": {description: 권한 없음}
+
+  /salaries/team:
+    get:
+      summary: 팀 연봉 목록 (manager/hr_system)
+      operationId: getTeamSalaries
+      responses:
+        "200":
+          description: 팀 연봉 목록
+          content:
+            application/json:
+              schema: {type: array, items: {$ref: "#/components/schemas/SalaryRecord"}}
+        "403": {description: 권한 없음}
+
+  /salaries:
+    get:
+      summary: 전체 연봉 목록 (hr_system)
+      operationId: getAllSalaries
+      responses:
+        "200":
+          description: 전체 연봉 목록
+          content:
+            application/json:
+              schema: {type: array, items: {$ref: "#/components/schemas/SalaryRecord"}}
+        "403": {description: 권한 없음}
+
+  /salaries/{employee_id}:
+    parameters:
+      - {name: employee_id, in: path, required: true, schema: {type: string}}
+    get:
+      summary: 특정 직원 연봉 조회
+      operationId: getSalary
+      responses:
+        "200":
+          description: 연봉 정보
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SalaryRecord"}
+        "403": {description: 권한 없음}
+        "404": {description: 연봉 정보 없음}
+    put:
+      summary: 특정 직원 연봉 수정
+      operationId: updateSalary
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/SalaryUpdate"}
+      responses:
+        "200":
+          description: 수정된 연봉
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SalaryRecord"}
+        "403": {description: 권한 없음}
+    delete:
+      summary: 연봉 레코드 삭제 (hr_system)
+      operationId: deleteSalary
+      responses:
+        "204": {description: 삭제 완료}
+        "403": {description: 권한 없음}
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Keycloak Access Token (Bearer)
+  schemas:
+    SalaryRecord:
+      type: object
+      properties:
+        employee_id: {type: string}
+        name:        {type: string}
+        team:        {type: string}
+        base_salary: {type: integer}
+        bonus:       {type: integer}
+        currency:    {type: string}
+        updated_at:  {type: string, format: date-time}
+    SalaryUpdate:
+      type: object
+      properties:
+        base_salary: {type: integer}
+        bonus:       {type: integer}
+    UserInfo:
+      type: object
+      properties:
+        id:       {type: string}
+        username: {type: string}
+        email:    {type: string}
+        role:     {type: string, enum: [employee, manager, hr_system]}
+        team:     {type: string}
+    HealthResponse:
+      type: object
+      properties:
+        status:    {type: string}
+        timestamp: {type: string, format: date-time}

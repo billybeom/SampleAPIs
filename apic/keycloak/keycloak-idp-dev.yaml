@@ -1,0 +1,144 @@
+# =============================================================================
+# IBM API Connect 12.1.1.2 — Keycloak 3rd Party IdP 연동 구성 (개발 환경)
+#
+# 파일 목적:
+#   - OIDC User Registry: API Manager UI 로그인에 Keycloak 계정 사용
+#   - Third-Party OAuth Provider: DataPower Gateway에서 Keycloak 토큰 검증
+#
+# Keycloak 버전: 21.x 이상
+# 환경: 개발 (dev)
+# Realm: dev-corp
+#
+# 사전 조건:
+#   1. Keycloak Admin Console에서 'apic-dev' Client 생성 (keycloak-setup-guide.md 참조)
+#   2. ${KEYCLOAK_CLIENT_SECRET} 환경 변수를 API Manager ConfigMap/Secret에 설정
+#   3. TLS Profile 'keycloak-dev-tls' 사전 생성 필요 (개발 환경은 insecure 허용)
+#
+# 적용 방법:
+#   apic login --server mgmt.dev.example.com --username admin --password ${ADMIN_PASSWORD} --realm admin/default-idp-1
+#   apic user-registries:create --server mgmt.dev.example.com --org admin --yaml keycloak-idp-dev.yaml
+#   apic oauth-providers:create   --server mgmt.dev.example.com --org admin --yaml keycloak-idp-dev.yaml
+# =============================================================================
+
+---
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. OIDC User Registry (API Manager 관리자/개발자 포털 로그인용)
+# ─────────────────────────────────────────────────────────────────────────────
+type: user_registry
+api_version: user_registry/1.0.0
+
+title: Keycloak OIDC Registry (DEV)
+name: keycloak-oidc-dev
+
+# OIDC 통합 유형 — IBM API Connect 내장 OIDC 연동
+integration_url: "https://mgmt.dev.example.com/api/cloud/integrations/user-registry/oidc"
+
+# 이메일 필드 필수 여부 (Keycloak에서 이메일 클레임 제공 시 true)
+email_required: true
+email_unique_if_exists: true
+
+# 사용자명 대소문자 구분
+case_sensitive: false
+
+# Identity 소속 조직 (admin org 등록 시 admin, Provider Org 등록 시 해당 org명)
+org: admin
+
+# Keycloak OIDC 연결 설정
+configuration:
+  # Keycloak dev-corp realm의 APIC 전용 Client ID
+  client_id: apic-dev
+
+  # ⚠️ 실제 배포 시 반드시 Secret으로 주입할 것
+  client_secret: "${KEYCLOAK_CLIENT_SECRET_DEV}"
+
+  # OIDC 표준 흐름 (Authorization Code Flow)
+  provider_type: standard
+
+  # Keycloak dev realm OIDC 엔드포인트
+  # Well-Known: http://keycloak-dev:8080/realms/dev-corp/.well-known/openid-configuration
+  authorization_endpoint: "https://keycloak.dev.example.com/realms/dev-corp/protocol/openid-connect/auth"
+
+  token_endpoint:
+    endpoint: "https://keycloak.dev.example.com/realms/dev-corp/protocol/openid-connect/token"
+
+  userinfo_endpoint: "https://keycloak.dev.example.com/realms/dev-corp/protocol/openid-connect/userinfo"
+
+  # JWT 서명 검증용 JWKS (RS256)
+  jwks_url: "https://keycloak.dev.example.com/realms/dev-corp/protocol/openid-connect/certs"
+
+  # 요청 스코프
+  scopes:
+    - openid
+    - profile
+    - email
+
+  # Keycloak 사용자 정보에서 APIC username으로 매핑할 클레임
+  username_claim: preferred_username
+
+  # 개발 환경: TLS 검증 완화 (운영 환경에서는 반드시 tls-profile 지정)
+  tls_client_profile_url: ""
+
+---
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. Third-Party OAuth Provider (DataPower Gateway 토큰 검증용)
+# ─────────────────────────────────────────────────────────────────────────────
+type: oauth_provider
+api_version: oauth_provider/2.0.0
+
+title: Keycloak OAuth2 Provider (DEV)
+name: keycloak-oauth-dev
+
+# Third-Party: IBM API Connect가 토큰을 직접 발급하지 않고 Keycloak에 위임
+provider_type: third_party
+
+# Keycloak dev-corp realm OAuth2 엔드포인트
+authorization_url: "https://keycloak.dev.example.com/realms/dev-corp/protocol/openid-connect/auth"
+token_url:         "https://keycloak.dev.example.com/realms/dev-corp/protocol/openid-connect/token"
+
+# 토큰 인트로스펙션 엔드포인트 (DataPower가 토큰 유효성 검증에 사용)
+introspect_url: "https://keycloak.dev.example.com/realms/dev-corp/protocol/openid-connect/token/introspect"
+
+# 인트로스펙션 결과 캐시 설정
+# - no-cache: 매 요청마다 Keycloak 호출 (개발 환경 권장 — 즉각 반영)
+# - time-to-live: TTL 기반 캐시
+introspect_cache_type: no-cache
+
+# 인트로스펙션 요청 시 사용할 Client 자격 증명
+introspect_client_id: apic-dev
+introspect_client_secret: "${KEYCLOAK_CLIENT_SECRET_DEV}"
+
+# 지원 OAuth2 흐름
+grant_types:
+  - authorization_code   # 표준 Authorization Code Flow (PKCE 포함)
+  - client_credentials   # M2M / 서비스 계정
+  - password             # Resource Owner Password (개발/테스트 전용)
+  - implicit             # 레거시 SPA (운영에서는 비활성화 권장)
+
+# API에서 요청 가능한 스코프 목록
+scopes:
+  openid:
+    description: "OpenID Connect 기본 스코프 — 사용자 식별"
+  profile:
+    description: "사용자 프로필 정보 (이름, 사용자명 등)"
+  email:
+    description: "이메일 주소"
+  salary:read:
+    description: "연봉 정보 조회 (api2-salary)"
+  salary:write:
+    description: "연봉 정보 수정 (api2-salary, manager/hr 역할 필요)"
+  library:read:
+    description: "도서관 API 조회 (api1-library)"
+  tours:read:
+    description: "여행 패키지 조회 (api3-tours)"
+  tours:book:
+    description: "여행 예약 (api3-tours)"
+
+# TLS 프로파일 (개발 환경은 기본값 사용)
+tls_profile_url: ""
+
+# PKCE 강제 여부 (개발 환경: 선택적)
+pkce_required: false
+pkce_support_plain: false
+
+# ID 토큰 발급 여부 (Third-Party이므로 Keycloak이 발급)
+id_token_enabled: false

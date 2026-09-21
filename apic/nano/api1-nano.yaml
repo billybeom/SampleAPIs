@@ -1,0 +1,299 @@
+# =============================================================================
+# IBM API Connect — DataPower Nano Gateway
+# API 1: Library Management API (인증 없음, 직관적 CRUD)
+#
+# ⚠️  중요: Nano Gateway는 OpenAPI 3.0만 지원합니다 (Swagger 2.0 미지원)
+#
+# Nano Gateway 정책 특징:
+#   - DataPower API Gateway와 완전히 다른 경량 정책 구조
+#   - YAML 키 이름이 다름: Invoke, Set, RateLimit, Cors, Authenticate 등 (대문자 시작)
+#   - GatewayScript 미지원 → LuaScript 사용
+#   - $(variable) 대신 JSONata 표현식 사용
+#   - x-ibm-configuration.gateway: datapower-nano-gateway
+#
+# DataPower / webMethods와의 주요 차이:
+#   ┌────────────────────┬─────────────────────┬──────────────────────┬──────────────────────┐
+#   │ 기능               │ DataPower           │ webMethods           │ Nano Gateway         │
+#   ├────────────────────┼─────────────────────┼──────────────────────┼──────────────────────┤
+#   │ Rate Limit         │ rate-limit          │ rate-limiter         │ RateLimit            │
+#   │ 변수 설정          │ set-variable        │ set-context-variable │ Set                  │
+#   │ 백엔드 호출        │ invoke              │ invoke               │ Invoke               │
+#   │ 스크립팅           │ GatewayScript       │ 미지원               │ LuaScript            │
+#   │ CORS               │ cors (설정 섹션)    │ cors (설정 섹션)     │ Cors (정책으로 추가) │
+#   │ 인증               │ oauth               │ identify-and-auth.  │ Authenticate         │
+#   │ 인가               │ (oauth 내 포함)     │ authorize-user       │ Authorize            │
+#   │ 변환               │ map/gatewayscript   │ request-transform.  │ Transform            │
+#   │ 파싱               │ parse               │ validate-api-spec.  │ Parse                │
+#   │ OAS 버전           │ OAS 2.0 + 3.0       │ OAS 2.0 + 3.0        │ OAS 3.0 전용         │
+#   └────────────────────┴─────────────────────┴──────────────────────┴──────────────────────┘
+#
+# Assembly 정책 흐름:
+#   1. RateLimit  : 분당 100회 제한
+#   2. Cors       : CORS 허용
+#   3. Set        : 요청 식별 헤더 주입 (DataPower의 set-variable에 해당)
+#   4. Invoke     : 백엔드 호출
+# =============================================================================
+
+# =====================================================================
+# --- OpenAPI 3.0 명세 ---
+# (Nano Gateway는 OAS 3.0만 지원 — Swagger 2.0 없음)
+# =====================================================================
+openapi: "3.0.3"
+info:
+  title: Library Management API
+  description: |
+    도서관 도서/대출 관리 REST API — Nano Gateway 샘플 (인증 없음)
+    백엔드: http://library-api:3000
+  version: "1.0.0"
+  x-ibm-name: library-management-api-nano
+
+servers:
+  - url: https://nano-gateway.example.com/library/v1
+    description: Nano Gateway (운영)
+  - url: https://nano-gateway-dev.example.com/library/v1
+    description: Nano Gateway (개발)
+
+x-ibm-configuration:
+  testable: true
+  enforced: true
+  phase: realized
+  gateway: datapower-nano-gateway   # ← Nano Gateway 전용 키워드
+
+  assembly:
+    execute:
+      # ── 1단계: RateLimit (Nano 방식 — DataPower의 rate-limit 정책에 해당) ─
+      # Nano는 정책 이름이 PascalCase (RateLimit, Set, Invoke 등)
+      - RateLimit:
+          version: 2.0.0
+          title: Rate Limit
+          # Nano는 count/interval/unit을 직접 지정
+          count: 100
+          interval: 60
+          unit: second
+          hard-limit: true         # 초과 시 429 반환
+          reject-message: 요청 한도(분당 100회)를 초과했습니다.
+
+      # ── 2단계: Cors (Nano에서는 정책으로 추가) ────────────────────────
+      # DataPower/webMethods의 cors: enabled: true 설정과 달리
+      # Nano Gateway는 Cors를 assembly 정책으로 명시합니다.
+      - Cors:
+          version: 2.0.0
+          title: CORS Policy
+          allow-origins:
+            - "*"
+          allow-methods:
+            - GET
+            - POST
+            - PUT
+            - PATCH
+            - DELETE
+            - OPTIONS
+          allow-headers:
+            - Content-Type
+            - Authorization
+            - X-Request-ID
+          max-age: 3600
+
+      # ── 3단계: Set (헤더 주입 — DataPower의 set-variable에 해당) ───────
+      # Nano는 Set 정책으로 헤더/변수를 설정합니다.
+      # JSONata 표현식 사용: $request.headers.x-request-id
+      - Set:
+          version: 2.0.0
+          title: Set Gateway Headers
+          # 헤더 설정 (message.headers 대신 request.headers 참조)
+          headers:
+            X-API-Gateway: "IBM-Nano-Gateway"
+            X-Request-ID: "$request.headers.\"x-request-id\""
+
+      # ── 4단계: Invoke (백엔드 호출) ───────────────────────────────────
+      # Nano의 Invoke는 DataPower와 유사하지만 url 형식이 다릅니다.
+      - Invoke:
+          version: 2.0.0
+          title: Invoke Library Backend
+          # Nano에서는 target-url 대신 url 사용
+          # JSONata로 경로 조합: $request.path + $request.queryString
+          url: "http://library-api:3000{$request.path}{$request.queryString ? '?' & $request.queryString : ''}"
+          verb: keep
+          timeout: 30
+          # Nano는 follow-redirects 대신 redirect-policy 사용
+          redirect-policy: follow
+
+    catch:
+      # Nano Gateway의 에러 처리는 Try/Throw 또는 catch 블록 사용
+      - errors: [ConnectionError]
+        execute:
+          - Set:
+              version: 2.0.0
+              title: Set Error Response
+              status-code: 503
+              body: '{"error":"백엔드 서비스에 연결할 수 없습니다."}'
+
+paths:
+  /books:
+    get:
+      summary: 도서 목록 조회
+      operationId: listBooks
+      parameters:
+        - {name: genre,     in: query, schema: {type: string}}
+        - {name: available, in: query, schema: {type: boolean}}
+        - {name: page,      in: query, schema: {type: integer, default: 1}}
+        - {name: limit,     in: query, schema: {type: integer, default: 10}}
+      responses:
+        "200":
+          description: 도서 목록
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total: {type: integer}
+                  data:  {type: array, items: {$ref: "#/components/schemas/Book"}}
+    post:
+      summary: 도서 등록
+      operationId: createBook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/BookInput"}
+      responses:
+        "201":
+          description: 등록된 도서
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Book"}
+
+  /books/{id}:
+    parameters:
+      - {name: id, in: path, required: true, schema: {type: string}}
+    get:
+      summary: 도서 단건 조회
+      operationId: getBook
+      responses:
+        "200":
+          description: 도서 정보
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Book"}
+        "404": {description: 도서를 찾을 수 없음}
+    put:
+      summary: 도서 전체 수정
+      operationId: replaceBook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/BookInput"}
+      responses:
+        "200":
+          description: 수정된 도서
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Book"}
+    patch:
+      summary: 도서 부분 수정
+      operationId: updateBook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/BookInput"}
+      responses:
+        "200":
+          description: 수정된 도서
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Book"}
+    delete:
+      summary: 도서 삭제
+      operationId: deleteBook
+      responses:
+        "204": {description: 삭제 완료}
+
+  /loans:
+    get:
+      summary: 대출 목록 조회
+      operationId: listLoans
+      parameters:
+        - {name: status, in: query, schema: {type: string, enum: [active, returned]}}
+        - {name: bookId, in: query, schema: {type: string}}
+      responses:
+        "200":
+          description: 대출 목록
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total: {type: integer}
+                  data:  {type: array, items: {$ref: "#/components/schemas/Loan"}}
+    post:
+      summary: 도서 대출
+      operationId: createLoan
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/LoanInput"}
+      responses:
+        "201":
+          description: 대출 정보
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Loan"}
+
+  /loans/{id}/return:
+    patch:
+      summary: 도서 반납
+      operationId: returnLoan
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}}
+      responses:
+        "200":
+          description: 반납 완료
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Loan"}
+
+components:
+  schemas:
+    Book:
+      type: object
+      properties:
+        id:            {type: string}
+        title:         {type: string}
+        author:        {type: string}
+        isbn:          {type: string}
+        genre:         {type: string}
+        publishedYear: {type: integer}
+        available:     {type: boolean}
+        stock:         {type: integer}
+    BookInput:
+      type: object
+      required: [title, author, isbn]
+      properties:
+        title:         {type: string}
+        author:        {type: string}
+        isbn:          {type: string}
+        genre:         {type: string}
+        publishedYear: {type: integer}
+        stock:         {type: integer, default: 1}
+    Loan:
+      type: object
+      properties:
+        id:            {type: string}
+        bookId:        {type: string}
+        borrowerName:  {type: string}
+        borrowerEmail: {type: string, format: email}
+        loanDate:      {type: string, format: date}
+        dueDate:       {type: string, format: date}
+        returnDate:    {type: string, format: date, nullable: true}
+        status:        {type: string, enum: [active, returned]}
+    LoanInput:
+      type: object
+      required: [bookId, borrowerName, borrowerEmail]
+      properties:
+        bookId:        {type: string}
+        borrowerName:  {type: string}
+        borrowerEmail: {type: string, format: email}
+        daysToLoan:    {type: integer, default: 14}

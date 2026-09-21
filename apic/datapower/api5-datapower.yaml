@@ -1,0 +1,637 @@
+# =============================================================================
+# IBM API Connect — DataPower API Gateway
+# API 5: OData 4.0 Product Catalog API (Node.js + Express, 포트 3003)
+#
+# Assembly 정책 흐름:
+#   1. rate-limit   : 분당 200회 제한
+#   2. parse        : 페이로드 파싱
+#   3. set-variable : OData 관련 헤더 주입, $metadata 라우팅 변수 설정
+#   4. invoke       : 백엔드 OData API 호출
+#
+# 비고: OData $metadata, $count 등 특수 경로 지원
+#       $filter, $select, $orderby 등 OData 쿼리 옵션 백엔드에서 처리
+# =============================================================================
+
+# =====================================================================
+# --- Swagger 2.0 명세 ---
+# =====================================================================
+swagger: "2.0"
+info:
+  title: OData 4.0 Product Catalog API
+  description: |
+    OData 4.0 프로토콜 기반 제품 카탈로그 API — DataPower API Gateway 샘플
+    백엔드: http://odata-api:3003
+    OData 쿼리: $filter, $select, $orderby, $top, $skip, $count, $expand
+    메타데이터: GET /$metadata
+  version: "1.0.0"
+  x-ibm-name: odata-product-catalog-api-dp
+
+basePath: /odata/v1
+schemes:
+  - https
+consumes:
+  - application/json
+produces:
+  - application/json
+
+security: []
+securityDefinitions: {}
+
+x-ibm-configuration:
+  testable: true
+  enforced: true
+  phase: realized
+  gateway: datapower-api-gateway
+
+  assembly:
+    execute:
+      # ── 1단계: Rate Limit ──────────────────────────────────────────────
+      - rate-limit:
+          version: 2.0.0
+          title: Rate Limit
+          source: plan
+          reject-message: 요청 한도를 초과했습니다.
+
+      # ── 2단계: Parse ──────────────────────────────────────────────────
+      - parse:
+          version: 2.0.0
+          title: Parse Request
+          parse-settings-reference:
+            default: apic-default-parsesettings
+
+      # ── 3단계: Set Variable ────────────────────────────────────────────
+      - set-variable:
+          version: 2.0.0
+          title: Set OData Headers
+          actions:
+            - set: message.headers.X-API-Gateway
+              value: IBM-DataPower-API-Gateway
+              type: string
+            - set: message.headers.X-Request-ID
+              value: $(request.headers.x-request-id)
+              type: string
+            # OData MaxVersion 헤더 — 클라이언트 호환성
+            - set: message.headers.OData-MaxVersion
+              value: "4.0"
+              type: string
+            # OData 응답에 UTF-8 문자셋 보장
+            - set: message.headers.Content-Type
+              value: application/json;odata.metadata=minimal;charset=utf-8
+              type: string
+
+      # ── 4단계: Invoke ──────────────────────────────────────────────────
+      - invoke:
+          version: 2.2.0
+          title: Invoke OData Backend
+          target-url: $(target-url)$(request.path)$(request.search)
+          verb: keep
+          follow-redirects: false
+          timeout: 30
+          output: message
+          # OData $metadata 경로는 XML 응답 허용
+          header-control:
+            type: blocklist
+            values: []
+
+    catch:
+      - errors: [ConnectionError]
+        execute:
+          - set-variable:
+              version: 2.0.0
+              title: Backend Unavailable
+              actions:
+                - set: message.status.code
+                  value: 503
+                  type: number
+                - set: message.body
+                  value: '{"error":{"code":"ServiceUnavailable","message":"백엔드 OData 서비스에 연결할 수 없습니다."}}'
+                  type: string
+
+  properties:
+    target-url:
+      value: http://odata-api:3003
+      description: 백엔드 OData API URL
+      encoded: false
+
+  cors:
+    enabled: true
+
+paths:
+  /:
+    get:
+      summary: OData 서비스 문서
+      operationId: getServiceDocument
+      responses:
+        "200": {description: OData 서비스 문서 (엔티티 셋 목록)}
+
+  /$metadata:
+    get:
+      summary: OData $metadata (CSDL XML)
+      operationId: getMetadata
+      produces:
+        - application/xml
+      responses:
+        "200": {description: CSDL XML 메타데이터}
+
+  /Products:
+    get:
+      summary: 제품 목록 조회 (OData 쿼리 옵션)
+      operationId: listProducts
+      parameters:
+        - {name: "$filter",  in: query, type: string, description: "OData 필터 (예: categoryId eq 1)"}
+        - {name: "$select",  in: query, type: string, description: "반환 필드 선택 (예: id,name,price)"}
+        - {name: "$orderby", in: query, type: string, description: "정렬 (예: price asc)"}
+        - {name: "$top",     in: query, type: integer}
+        - {name: "$skip",    in: query, type: integer}
+        - {name: "$count",   in: query, type: string, enum: ["true","false"]}
+        - {name: "$expand",  in: query, type: string, description: "네비게이션 확장 (예: Category)"}
+      responses:
+        "200": {description: OData 제품 컬렉션}
+    post:
+      summary: 제품 생성
+      operationId: createProduct
+      parameters:
+        - {in: body, name: body, schema: {$ref: "#/definitions/ProductInput"}}
+      responses:
+        "201": {description: 생성된 제품}
+
+  /Products/$count:
+    get:
+      summary: 제품 수 조회
+      operationId: countProducts
+      parameters:
+        - {name: "$filter", in: query, type: string}
+      produces:
+        - text/plain
+      responses:
+        "200": {description: 제품 수 (정수)}
+
+  /Products/{id}:
+    parameters:
+      - {name: id, in: path, required: true, type: integer}
+    get:
+      summary: 제품 단건 조회
+      operationId: getProduct
+      parameters:
+        - {name: "$select", in: query, type: string}
+        - {name: "$expand", in: query, type: string}
+      responses:
+        "200": {description: 제품 정보}
+        "404": {description: 제품을 찾을 수 없음}
+    patch:
+      summary: 제품 부분 수정 (OData PATCH)
+      operationId: updateProduct
+      parameters:
+        - {in: body, name: body, schema: {$ref: "#/definitions/ProductInput"}}
+      responses:
+        "204": {description: 수정 성공}
+    put:
+      summary: 제품 전체 교체 (OData PUT)
+      operationId: replaceProduct
+      parameters:
+        - {in: body, name: body, schema: {$ref: "#/definitions/ProductInput"}}
+      responses:
+        "204": {description: 교체 성공}
+    delete:
+      summary: 제품 삭제
+      operationId: deleteProduct
+      responses:
+        "204": {description: 삭제 성공}
+
+  /Categories:
+    get:
+      summary: 카테고리 목록 조회
+      operationId: listCategories
+      parameters:
+        - {name: "$filter",  in: query, type: string}
+        - {name: "$select",  in: query, type: string}
+        - {name: "$orderby", in: query, type: string}
+        - {name: "$top",     in: query, type: integer}
+        - {name: "$skip",    in: query, type: integer}
+        - {name: "$count",   in: query, type: string, enum: ["true","false"]}
+        - {name: "$expand",  in: query, type: string}
+      responses:
+        "200": {description: OData 카테고리 컬렉션}
+    post:
+      summary: 카테고리 생성
+      operationId: createCategory
+      parameters:
+        - {in: body, name: body, schema: {$ref: "#/definitions/CategoryInput"}}
+      responses:
+        "201": {description: 생성된 카테고리}
+
+  /Categories/$count:
+    get:
+      summary: 카테고리 수 조회
+      operationId: countCategories
+      produces:
+        - text/plain
+      responses:
+        "200": {description: 카테고리 수 (정수)}
+
+  /Categories/{id}:
+    parameters:
+      - {name: id, in: path, required: true, type: integer}
+    get:
+      summary: 카테고리 단건 조회
+      operationId: getCategory
+      parameters:
+        - {name: "$expand", in: query, type: string}
+      responses:
+        "200": {description: 카테고리 정보}
+        "404": {description: 카테고리를 찾을 수 없음}
+    patch:
+      summary: 카테고리 부분 수정
+      operationId: updateCategory
+      parameters:
+        - {in: body, name: body, schema: {$ref: "#/definitions/CategoryInput"}}
+      responses:
+        "204": {description: 수정 성공}
+    delete:
+      summary: 카테고리 삭제
+      operationId: deleteCategory
+      responses:
+        "204": {description: 삭제 성공}
+
+  /Categories/{id}/Products:
+    parameters:
+      - {name: id, in: path, required: true, type: integer}
+    get:
+      summary: 카테고리별 제품 목록 (네비게이션 프로퍼티)
+      operationId: listProductsByCategory
+      parameters:
+        - {name: "$filter",  in: query, type: string}
+        - {name: "$orderby", in: query, type: string}
+        - {name: "$top",     in: query, type: integer}
+        - {name: "$skip",    in: query, type: integer}
+        - {name: "$count",   in: query, type: string, enum: ["true","false"]}
+      responses:
+        "200": {description: 카테고리 내 제품 목록}
+
+definitions:
+  ProductInput:
+    type: object
+    required: [name, price, categoryId]
+    properties:
+      name:         {type: string}
+      description:  {type: string}
+      price:        {type: number}
+      stock:        {type: integer}
+      rating:       {type: number}
+      categoryId:   {type: integer}
+      discontinued: {type: boolean, default: false}
+  CategoryInput:
+    type: object
+    required: [name]
+    properties:
+      name:        {type: string}
+      description: {type: string}
+
+---
+# =====================================================================
+# --- OpenAPI 3.0 명세 ---
+# =====================================================================
+openapi: "3.0.3"
+info:
+  title: OData 4.0 Product Catalog API
+  description: |
+    OData 4.0 프로토콜 기반 제품 카탈로그 API — DataPower API Gateway 샘플
+    OData 쿼리: $filter, $select, $orderby, $top, $skip, $count, $expand
+  version: "1.0.0"
+  x-ibm-name: odata-product-catalog-api-dp-oas3
+
+servers:
+  - url: https://gateway.example.com/odata/v1
+    description: DataPower API Gateway (운영)
+  - url: https://gateway-dev.example.com/odata/v1
+    description: DataPower API Gateway (개발)
+
+x-ibm-configuration:
+  testable: true
+  enforced: true
+  phase: realized
+  gateway: datapower-api-gateway
+
+  assembly:
+    execute:
+      - rate-limit:
+          version: 2.0.0
+          title: Rate Limit
+          source: plan
+          reject-message: 요청 한도를 초과했습니다.
+      - parse:
+          version: 2.0.0
+          title: Parse Request
+          parse-settings-reference:
+            default: apic-default-parsesettings
+      - set-variable:
+          version: 2.0.0
+          title: Set OData Headers
+          actions:
+            - set: message.headers.X-API-Gateway
+              value: IBM-DataPower-API-Gateway
+              type: string
+            - set: message.headers.OData-MaxVersion
+              value: "4.0"
+              type: string
+      - invoke:
+          version: 2.2.0
+          title: Invoke OData Backend
+          target-url: $(target-url)$(request.path)$(request.search)
+          verb: keep
+          timeout: 30
+          output: message
+
+    catch:
+      - errors: [ConnectionError]
+        execute:
+          - set-variable:
+              version: 2.0.0
+              title: Backend Unavailable
+              actions:
+                - set: message.status.code
+                  value: 503
+                  type: number
+                - set: message.body
+                  value: '{"error":{"code":"ServiceUnavailable","message":"백엔드 서비스에 연결할 수 없습니다."}}'
+                  type: string
+
+  properties:
+    target-url:
+      value: http://odata-api:3003
+      description: 백엔드 OData API URL
+      encoded: false
+
+  cors:
+    enabled: true
+
+paths:
+  /:
+    get:
+      summary: OData 서비스 문서
+      operationId: getServiceDocument
+      responses:
+        "200":
+          description: OData 서비스 문서
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ServiceDocument"}
+
+  /$metadata:
+    get:
+      summary: OData $metadata (CSDL XML)
+      operationId: getMetadata
+      responses:
+        "200":
+          description: CSDL XML 메타데이터
+          content:
+            application/xml:
+              schema: {type: string}
+
+  /Products:
+    get:
+      summary: 제품 목록 조회
+      operationId: listProducts
+      parameters:
+        - {name: "$filter",  in: query, schema: {type: string}}
+        - {name: "$select",  in: query, schema: {type: string}}
+        - {name: "$orderby", in: query, schema: {type: string}}
+        - {name: "$top",     in: query, schema: {type: integer}}
+        - {name: "$skip",    in: query, schema: {type: integer}}
+        - {name: "$count",   in: query, schema: {type: string, enum: ["true","false"]}}
+        - {name: "$expand",  in: query, schema: {type: string}}
+      responses:
+        "200":
+          description: OData 제품 컬렉션
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ProductCollection"}
+    post:
+      summary: 제품 생성
+      operationId: createProduct
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ProductInput"}
+      responses:
+        "201":
+          description: 생성된 제품
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Product"}
+
+  /Products/$count:
+    get:
+      summary: 제품 수 조회
+      operationId: countProducts
+      parameters:
+        - {name: "$filter", in: query, schema: {type: string}}
+      responses:
+        "200":
+          description: 제품 수
+          content:
+            text/plain:
+              schema: {type: integer}
+
+  /Products/{id}:
+    parameters:
+      - {name: id, in: path, required: true, schema: {type: integer}}
+    get:
+      summary: 제품 단건 조회
+      operationId: getProduct
+      parameters:
+        - {name: "$select", in: query, schema: {type: string}}
+        - {name: "$expand", in: query, schema: {type: string}}
+      responses:
+        "200":
+          description: 제품 정보
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Product"}
+        "404": {description: 제품을 찾을 수 없음}
+    patch:
+      summary: 제품 부분 수정 (OData PATCH)
+      operationId: updateProduct
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ProductInput"}
+      responses:
+        "204": {description: 수정 성공}
+    put:
+      summary: 제품 전체 교체 (OData PUT)
+      operationId: replaceProduct
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ProductInput"}
+      responses:
+        "204": {description: 교체 성공}
+    delete:
+      summary: 제품 삭제
+      operationId: deleteProduct
+      responses:
+        "204": {description: 삭제 성공}
+
+  /Categories:
+    get:
+      summary: 카테고리 목록 조회
+      operationId: listCategories
+      parameters:
+        - {name: "$filter",  in: query, schema: {type: string}}
+        - {name: "$select",  in: query, schema: {type: string}}
+        - {name: "$orderby", in: query, schema: {type: string}}
+        - {name: "$top",     in: query, schema: {type: integer}}
+        - {name: "$skip",    in: query, schema: {type: integer}}
+        - {name: "$count",   in: query, schema: {type: string, enum: ["true","false"]}}
+        - {name: "$expand",  in: query, schema: {type: string}}
+      responses:
+        "200":
+          description: OData 카테고리 컬렉션
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/CategoryCollection"}
+    post:
+      summary: 카테고리 생성
+      operationId: createCategory
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CategoryInput"}
+      responses:
+        "201":
+          description: 생성된 카테고리
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Category"}
+
+  /Categories/$count:
+    get:
+      summary: 카테고리 수 조회
+      operationId: countCategories
+      responses:
+        "200":
+          description: 카테고리 수
+          content:
+            text/plain:
+              schema: {type: integer}
+
+  /Categories/{id}:
+    parameters:
+      - {name: id, in: path, required: true, schema: {type: integer}}
+    get:
+      summary: 카테고리 단건 조회
+      operationId: getCategory
+      parameters:
+        - {name: "$expand", in: query, schema: {type: string}}
+      responses:
+        "200":
+          description: 카테고리 정보
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Category"}
+        "404": {description: 카테고리를 찾을 수 없음}
+    patch:
+      summary: 카테고리 부분 수정
+      operationId: updateCategory
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CategoryInput"}
+      responses:
+        "204": {description: 수정 성공}
+    delete:
+      summary: 카테고리 삭제
+      operationId: deleteCategory
+      responses:
+        "204": {description: 삭제 성공}
+
+  /Categories/{id}/Products:
+    parameters:
+      - {name: id, in: path, required: true, schema: {type: integer}}
+    get:
+      summary: 카테고리별 제품 목록 (네비게이션 프로퍼티)
+      operationId: listProductsByCategory
+      parameters:
+        - {name: "$filter",  in: query, schema: {type: string}}
+        - {name: "$orderby", in: query, schema: {type: string}}
+        - {name: "$top",     in: query, schema: {type: integer}}
+        - {name: "$skip",    in: query, schema: {type: integer}}
+        - {name: "$count",   in: query, schema: {type: string, enum: ["true","false"]}}
+      responses:
+        "200":
+          description: 카테고리 내 제품 목록
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ProductCollection"}
+
+components:
+  schemas:
+    Product:
+      type: object
+      properties:
+        id:           {type: integer}
+        name:         {type: string}
+        description:  {type: string}
+        price:        {type: number}
+        stock:        {type: integer}
+        rating:       {type: number, nullable: true}
+        categoryId:   {type: integer}
+        createdAt:    {type: string, format: date-time}
+        discontinued: {type: boolean}
+    ProductInput:
+      type: object
+      required: [name, price, categoryId]
+      properties:
+        name:         {type: string}
+        description:  {type: string}
+        price:        {type: number}
+        stock:        {type: integer, default: 0}
+        rating:       {type: number, nullable: true}
+        categoryId:   {type: integer}
+        discontinued: {type: boolean, default: false}
+    Category:
+      type: object
+      properties:
+        id:          {type: integer}
+        name:        {type: string}
+        description: {type: string}
+    CategoryInput:
+      type: object
+      required: [name]
+      properties:
+        name:        {type: string}
+        description: {type: string}
+    ProductCollection:
+      type: object
+      properties:
+        "@odata.context": {type: string}
+        "@odata.count":   {type: integer}
+        value:
+          type: array
+          items: {$ref: "#/components/schemas/Product"}
+    CategoryCollection:
+      type: object
+      properties:
+        "@odata.context": {type: string}
+        "@odata.count":   {type: integer}
+        value:
+          type: array
+          items: {$ref: "#/components/schemas/Category"}
+    ServiceDocument:
+      type: object
+      properties:
+        "@odata.context": {type: string}
+        value:
+          type: array
+          items:
+            type: object
+            properties:
+              name: {type: string}
+              kind: {type: string}
+              url:  {type: string}

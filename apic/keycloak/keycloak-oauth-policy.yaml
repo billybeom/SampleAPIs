@@ -1,0 +1,525 @@
+# =============================================================================
+# IBM API Connect 12.1.1.2 — DataPower API Gateway
+# Keycloak JWT/OAuth2 검증 Assembly 정책 모음
+#
+# 파일 목적:
+#   이 파일은 DataPower API Gateway assembly에서 재사용 가능한 Keycloak 연동
+#   정책 패턴(Policy Pattern)을 정의합니다. 각 API의 x-ibm-configuration.assembly
+#   섹션에 아래 패턴을 그대로 복사하여 적용합니다.
+#
+# 포함 패턴:
+#   Pattern A — JWT 로컬 검증 (JWKS, 오프라인, 고성능)
+#   Pattern B — OAuth2 인트로스펙션 검증 (실시간, Third-Party OAuth Provider)
+#   Pattern C — 역할 기반 접근 제어 (RBAC, GatewayScript)
+#   Pattern D — 전체 통합 흐름 (Pattern A + C 조합, api2-salary 수준)
+#
+# 사용 전 확인 사항:
+#   - DataPower Gateway Service > OAuth > Third-Party OAuth Provider 등록 완료
+#   - TLS Profile 'keycloak-prod-tls' (또는 환경별 이름) 생성 완료
+#   - JWKS URL 접근 가능 여부 확인
+# =============================================================================
+
+---
+# ─────────────────────────────────────────────────────────────────────────────
+# Pattern A: JWT 로컬 검증 (RS256, JWKS URI)
+#
+# 특징:
+#   - DataPower가 Keycloak JWKS에서 공개키를 가져와 JWT 서명을 직접 검증
+#   - Keycloak 인트로스펙션 API를 호출하지 않으므로 지연 없음 (고성능)
+#   - 토큰 폐기(Revocation) 즉시 반영 불가 — TTL 내 유효 처리
+#   - 적합: 공개 API, 읽기 전용, 성능 우선 API
+#
+# 적용 위치: x-ibm-configuration.assembly.execute
+# ─────────────────────────────────────────────────────────────────────────────
+x-pattern-a-jwt-local-validate:
+  description: |
+    JWT 로컬 검증 패턴 — 아래 execute 블록을 API YAML의
+    x-ibm-configuration.assembly.execute 에 붙여넣기
+  execute:
+    # ── 1단계: Rate Limit ────────────────────────────────────────────────────
+    - rate-limit:
+        version: 2.0.0
+        title: "Rate Limit — Keycloak JWT API"
+        source: plan                   # API Plan에서 limit 상속
+        weight: 1
+
+    # ── 2단계: JWT 검증 ──────────────────────────────────────────────────────
+    - jwt-validate:
+        version: 2.0.0
+        title: "Keycloak JWT 서명 검증 (RS256)"
+        description: |
+          Keycloak이 발급한 Access Token의 RS256 서명을 JWKS URI로 검증합니다.
+          검증 성공 시 페이로드 클레임이 context.message.jwt 에 저장됩니다.
+
+        # JWT 소스: Authorization: Bearer <token> 헤더
+        jwt: request.headers.authorization
+        output-claims: decoded.jwt     # 검증된 클레임을 decoded.jwt 변수에 저장
+
+        # 서명 검증 설정
+        iss-claim: "https://auth.example.com/realms/corp"   # 환경에 맞게 수정
+        aud-claim: "apic-prod"                               # Keycloak Client ID
+
+        # Keycloak JWKS URI (DataPower가 공개키를 동적으로 가져옴)
+        jwk-url: "https://auth.example.com/realms/corp/protocol/openid-connect/certs"
+
+        # 만료 시간 클레임 검증
+        exp-claim: true
+
+        # TLS 프로파일 (JWKS URL 호출 시 사용)
+        tls-profile: "keycloak-prod-tls"
+
+    # ── 3단계: 클레임 추출 및 백엔드 헤더 주입 ───────────────────────────────
+    - set-variable:
+        version: 2.0.0
+        title: "Keycloak 클레임 → 백엔드 헤더 매핑"
+        description: |
+          검증된 JWT에서 사용자 정보를 추출하여 백엔드 서비스에
+          X-User-* 헤더로 전달합니다.
+        actions:
+          # 사용자 Subject (Keycloak User ID)
+          - set: message.headers.X-User-Sub
+            value: "$(decoded.jwt.sub)"
+            type: string
+
+          # 사용자명 (preferred_username 클레임)
+          - set: message.headers.X-User-Name
+            value: "$(decoded.jwt.preferred_username)"
+            type: string
+
+          # 이메일
+          - set: message.headers.X-User-Email
+            value: "$(decoded.jwt.email)"
+            type: string
+
+          # Realm 역할 (realm_access.roles 배열 → 콤마 구분 문자열)
+          - set: message.headers.X-User-Roles
+            value: "$(decoded.jwt.realm_access.roles)"
+            type: string
+
+          # 원본 토큰 백엔드 전달 (백엔드가 자체 검증 필요 시)
+          - set: message.headers.Authorization
+            value: "$(request.headers.authorization)"
+            type: string
+
+    # ── 4단계: 백엔드 호출 ──────────────────────────────────────────────────
+    - invoke:
+        version: 2.0.0
+        title: "백엔드 서비스 호출"
+        target-url: "$(target-url)"
+        follow-redirects: false
+        timeout: 60
+        verb: keep                     # 원본 HTTP 메서드 유지
+        cache-response: protocol
+        cache-ttl: 900
+        tls-profile: ""               # 백엔드가 내부망이면 TLS 불필요
+        stop-on-error:
+          - ConnectionError
+          - OperationError
+
+  catch:
+    - errors:
+        - ConnectionError
+      execute:
+        - set-variable:
+            version: 2.0.0
+            title: "백엔드 연결 오류 응답"
+            actions:
+              - set: message.status.code
+                value: 503
+                type: number
+              - set: message.status.reason
+                value: "Service Unavailable"
+                type: string
+              - set: message.body
+                value: '{"error":"upstream_unavailable","message":"백엔드 서비스에 연결할 수 없습니다."}'
+                type: string
+
+---
+# ─────────────────────────────────────────────────────────────────────────────
+# Pattern B: OAuth2 인트로스펙션 검증 (실시간)
+#
+# 특징:
+#   - DataPower가 Keycloak 인트로스펙션 엔드포인트를 실시간 호출
+#   - 토큰 폐기(Revocation) 즉각 반영 — 보안 우선 API에 적합
+#   - 인트로스펙션 호출 지연 존재 — Third-Party OAuth Provider 캐시로 완화
+#   - 적합: 금융, 개인정보, 쓰기 권한 API (api2-salary 등)
+#
+# 전제 조건:
+#   API Manager에서 Third-Party OAuth Provider (keycloak-oauth-prod) 등록 완료
+#   해당 Provider를 API의 security scheme에 참조
+# ─────────────────────────────────────────────────────────────────────────────
+x-pattern-b-oauth-introspect:
+  description: |
+    OAuth2 인트로스펙션 패턴 — 아래 security + assembly 블록을 API YAML에 적용
+  security_scheme_example:
+    keycloak-oauth2:
+      type: oauth2
+      x-ibm-oauth-provider: keycloak-oauth-prod   # Third-Party Provider 이름
+      flow: accessCode
+      authorizationUrl: "https://auth.example.com/realms/corp/protocol/openid-connect/auth"
+      tokenUrl: "https://auth.example.com/realms/corp/protocol/openid-connect/token"
+      scopes:
+        openid: "OpenID 기본 스코프"
+        profile: "프로필 정보"
+        email: "이메일"
+
+  execute:
+    # ── 1단계: Rate Limit ────────────────────────────────────────────────────
+    - rate-limit:
+        version: 2.0.0
+        title: "Rate Limit"
+        source: plan
+        weight: 1
+
+    # ── 2단계: 페이로드 파싱 및 위협 탐지 ────────────────────────────────────
+    - parse:
+        version: 2.0.0
+        title: "요청 파싱 및 위협 탐지"
+        parse-settings-reference:
+          default: apic-default-parsesettings
+        input: request
+        output: parsed-request
+
+    # ── 3단계: OAuth2 검증 (Third-Party Provider → 인트로스펙션 호출) ────────
+    # ※ API security 섹션에 keycloak-oauth2 scheme 지정 시 DataPower가
+    #   자동으로 Third-Party OAuth Provider의 introspect_url을 호출합니다.
+    #   아래 set-variable은 인트로스펙션 성공 후 클레임을 헤더로 매핑합니다.
+    - set-variable:
+        version: 2.0.0
+        title: "OAuth2 인트로스펙션 클레임 → 백엔드 헤더 매핑"
+        description: |
+          인트로스펙션 성공 시 DataPower는 아래 context 변수에 클레임을 저장합니다:
+            oauth.verified       : true (검증 성공)
+            oauth.resource-owner : Keycloak sub 클레임
+            oauth.client-id      : Client ID
+            oauth.scopes         : 승인된 스코프 목록
+        actions:
+          - set: message.headers.X-User-Sub
+            value: "$(oauth.resource-owner)"
+            type: string
+
+          - set: message.headers.X-Authenticated-Client
+            value: "$(oauth.client-id)"
+            type: string
+
+          - set: message.headers.X-Oauth-Scopes
+            value: "$(oauth.scopes)"
+            type: string
+
+          - set: message.headers.Authorization
+            value: "$(request.headers.authorization)"
+            type: string
+
+    # ── 4단계: 백엔드 호출 ──────────────────────────────────────────────────
+    - invoke:
+        version: 2.0.0
+        title: "백엔드 서비스 호출"
+        target-url: "$(target-url)"
+        follow-redirects: false
+        timeout: 60
+        verb: keep
+        cache-response: protocol
+        cache-ttl: 900
+        stop-on-error:
+          - ConnectionError
+          - OperationError
+
+  catch:
+    - errors:
+        - ConnectionError
+      execute:
+        - set-variable:
+            version: 2.0.0
+            title: "백엔드 연결 오류 응답"
+            actions:
+              - set: message.status.code
+                value: 503
+                type: number
+              - set: message.body
+                value: '{"error":"upstream_unavailable","message":"백엔드 서비스에 연결할 수 없습니다."}'
+                type: string
+
+---
+# ─────────────────────────────────────────────────────────────────────────────
+# Pattern C: GatewayScript RBAC 검증
+#
+# 특징:
+#   - JWT 검증(Pattern A) 또는 OAuth2 인트로스펙션(Pattern B) 이후 단계에 추가
+#   - Keycloak realm_access.roles 클레임 기반 역할 검사
+#   - 역할 미충족 시 403 Forbidden 즉시 반환
+#   - 적합: api2-salary (employee/manager/hr_system 역할 분기)
+#
+# 사용법: 아래 gatewayscript 블록을 jwt-validate 또는 set-variable 이후에 삽입
+# ─────────────────────────────────────────────────────────────────────────────
+x-pattern-c-rbac-gatewayscript:
+  description: |
+    RBAC 검증 패턴 — gatewayscript 정책을 jwt-validate 바로 다음에 추가
+    required_roles 변수에 필요한 역할 배열을 지정합니다.
+
+  # ── RBAC 검증 GatewayScript ──────────────────────────────────────────────
+  # 아래 블록을 assembly.execute에 추가 (jwt-validate 다음 위치):
+  gatewayscript_block:
+    - gatewayscript:
+        version: 2.0.0
+        title: "Keycloak RBAC 역할 검증"
+        description: |
+          decoded.jwt 변수에서 realm_access.roles 를 읽어
+          API가 요구하는 역할 보유 여부를 검사합니다.
+          역할 없으면 403 반환.
+        source: |
+          // Keycloak JWT에서 realm 역할 추출
+          var decodedJwt = context.get('decoded.jwt');
+
+          if (!decodedJwt) {
+            // JWT 검증 미실시 (Pattern A 선행 필요)
+            context.set('message.status.code', 401);
+            context.set('message.body', JSON.stringify({
+              error: 'unauthorized',
+              message: 'JWT 클레임 정보를 찾을 수 없습니다. jwt-validate 정책이 먼저 실행되어야 합니다.'
+            }));
+            context.reject('UnauthorizedError');
+            return;
+          }
+
+          // realm_access.roles 추출 (Keycloak 표준 클레임)
+          var realmRoles = [];
+          if (decodedJwt.realm_access && Array.isArray(decodedJwt.realm_access.roles)) {
+            realmRoles = decodedJwt.realm_access.roles;
+          }
+
+          // resource_access.<clientId>.roles 추출 (Client 수준 역할)
+          var clientId = decodedJwt.azp || decodedJwt.client_id || '';
+          var clientRoles = [];
+          if (decodedJwt.resource_access && decodedJwt.resource_access[clientId] &&
+              Array.isArray(decodedJwt.resource_access[clientId].roles)) {
+            clientRoles = decodedJwt.resource_access[clientId].roles;
+          }
+
+          // 통합 역할 목록 (realm + client 역할 병합)
+          var allRoles = realmRoles.concat(clientRoles);
+
+          // ── 역할 우선순위 (api2-salary 기준) ─────────────────────────────
+          // hr_system > manager > employee
+          var roleHierarchy = ['hr_system', 'manager', 'employee'];
+          var effectiveRole = null;
+          for (var i = 0; i < roleHierarchy.length; i++) {
+            if (allRoles.indexOf(roleHierarchy[i]) !== -1) {
+              effectiveRole = roleHierarchy[i];
+              break;
+            }
+          }
+
+          if (!effectiveRole) {
+            // 역할 없음 → 403
+            context.set('message.status.code', 403);
+            context.set('message.status.reason', 'Forbidden');
+            context.set('message.body', JSON.stringify({
+              error: 'forbidden',
+              message: '이 API에 접근하려면 employee, manager 또는 hr_system 역할이 필요합니다.',
+              sub: decodedJwt.sub
+            }));
+            context.reject('ForbiddenError');
+            return;
+          }
+
+          // 역할을 백엔드 헤더로 전달
+          context.set('message.headers.X-User-Role', effectiveRole);
+          context.set('message.headers.X-All-Roles', allRoles.join(','));
+
+          // 요청 경로 기반 추가 검증 예시 (쓰기 작업은 manager+ 필요)
+          var method = context.get('request.verb');
+          var path   = context.get('request.path') || '';
+
+          if ((method === 'POST' || method === 'PUT' || method === 'PATCH') &&
+              path.indexOf('/salaries') !== -1) {
+            if (effectiveRole === 'employee') {
+              context.set('message.status.code', 403);
+              context.set('message.status.reason', 'Forbidden');
+              context.set('message.body', JSON.stringify({
+                error: 'forbidden',
+                message: '연봉 정보 수정은 manager 또는 hr_system 역할이 필요합니다.',
+                effective_role: effectiveRole
+              }));
+              context.reject('ForbiddenError');
+              return;
+            }
+          }
+
+          // 삭제 작업은 hr_system만 허용
+          if (method === 'DELETE' && path.indexOf('/salaries') !== -1) {
+            if (effectiveRole !== 'hr_system') {
+              context.set('message.status.code', 403);
+              context.set('message.status.reason', 'Forbidden');
+              context.set('message.body', JSON.stringify({
+                error: 'forbidden',
+                message: '연봉 정보 삭제는 hr_system 역할만 허용됩니다.',
+                effective_role: effectiveRole
+              }));
+              context.reject('ForbiddenError');
+              return;
+            }
+          }
+
+          // 검증 통과 — 흐름 계속
+          context.set('message.headers.X-RBAC-Passed', 'true');
+
+---
+# ─────────────────────────────────────────────────────────────────────────────
+# Pattern D: 전체 통합 흐름 (JWT 검증 + RBAC + 백엔드 호출)
+#
+# 이 패턴은 api2-salary 수준의 완전한 Keycloak 연동 흐름입니다.
+# 실제 API YAML의 x-ibm-configuration.assembly 섹션에 그대로 적용 가능합니다.
+#
+# 흐름:
+#   1. rate-limit   → 분당 60회 제한
+#   2. parse        → 요청 파싱 및 위협 탐지
+#   3. jwt-validate → Keycloak RS256 JWT 서명 검증
+#   4. gatewayscript→ RBAC 역할 검증 (Keycloak realm_access.roles)
+#   5. set-variable → 클레임 → 백엔드 헤더 매핑
+#   6. invoke       → 백엔드 Salary API 호출
+#   catch           → 오류 응답 처리
+# ─────────────────────────────────────────────────────────────────────────────
+x-pattern-d-full-integration:
+  description: |
+    전체 통합 패턴 (JWT + RBAC + invoke) — api2-salary 에 적용 가능한 완성 assembly
+
+  assembly:
+    execute:
+      # ── 1단계: Rate Limit ────────────────────────────────────────────────
+      - rate-limit:
+          version: 2.0.0
+          title: "Rate Limit — Salary API"
+          source: plan
+          weight: 1
+
+      # ── 2단계: 페이로드 파싱 ─────────────────────────────────────────────
+      - parse:
+          version: 2.0.0
+          title: "요청 파싱 및 위협 탐지"
+          parse-settings-reference:
+            default: apic-default-parsesettings
+          input: request
+          output: parsed-request
+
+      # ── 3단계: JWT 서명 검증 ─────────────────────────────────────────────
+      - jwt-validate:
+          version: 2.0.0
+          title: "Keycloak JWT 서명 검증 (RS256)"
+          jwt: request.headers.authorization
+          output-claims: decoded.jwt
+          iss-claim: "https://auth.example.com/realms/corp"   # 환경에 맞게 수정
+          aud-claim: "apic-prod"
+          jwk-url: "https://auth.example.com/realms/corp/protocol/openid-connect/certs"
+          exp-claim: true
+          tls-profile: "keycloak-prod-tls"
+
+      # ── 4단계: RBAC 역할 검증 ────────────────────────────────────────────
+      - gatewayscript:
+          version: 2.0.0
+          title: "Keycloak RBAC 역할 검증"
+          source: |
+            var decodedJwt = context.get('decoded.jwt');
+            if (!decodedJwt) {
+              context.set('message.status.code', 401);
+              context.set('message.body', JSON.stringify({error:'unauthorized',message:'JWT 클레임 없음'}));
+              context.reject('UnauthorizedError');
+              return;
+            }
+            var realmRoles = (decodedJwt.realm_access && decodedJwt.realm_access.roles) || [];
+            var azp = decodedJwt.azp || '';
+            var clientRoles = (decodedJwt.resource_access && decodedJwt.resource_access[azp] &&
+                               decodedJwt.resource_access[azp].roles) || [];
+            var allRoles = realmRoles.concat(clientRoles);
+            var hierarchy = ['hr_system','manager','employee'];
+            var role = null;
+            for (var i=0;i<hierarchy.length;i++){if(allRoles.indexOf(hierarchy[i])!==-1){role=hierarchy[i];break;}}
+            if (!role) {
+              context.set('message.status.code', 403);
+              context.set('message.body', JSON.stringify({error:'forbidden',message:'필요한 역할이 없습니다.'}));
+              context.reject('ForbiddenError');
+              return;
+            }
+            var method = context.get('request.verb');
+            var path   = context.get('request.path') || '';
+            if ((method==='POST'||method==='PUT'||method==='PATCH')&&path.indexOf('/salaries')!==-1&&role==='employee'){
+              context.set('message.status.code', 403);
+              context.set('message.body', JSON.stringify({error:'forbidden',message:'수정 권한 없음'}));
+              context.reject('ForbiddenError'); return;
+            }
+            if (method==='DELETE'&&path.indexOf('/salaries')!==-1&&role!=='hr_system'){
+              context.set('message.status.code', 403);
+              context.set('message.body', JSON.stringify({error:'forbidden',message:'삭제는 hr_system만 허용'}));
+              context.reject('ForbiddenError'); return;
+            }
+            context.set('message.headers.X-User-Role', role);
+            context.set('message.headers.X-All-Roles', allRoles.join(','));
+
+      # ── 5단계: 클레임 → 백엔드 헤더 매핑 ────────────────────────────────
+      - set-variable:
+          version: 2.0.0
+          title: "Keycloak 클레임 → 백엔드 헤더"
+          actions:
+            - set: message.headers.X-User-Sub
+              value: "$(decoded.jwt.sub)"
+              type: string
+            - set: message.headers.X-User-Name
+              value: "$(decoded.jwt.preferred_username)"
+              type: string
+            - set: message.headers.X-User-Email
+              value: "$(decoded.jwt.email)"
+              type: string
+            - set: message.headers.Authorization
+              value: "$(request.headers.authorization)"
+              type: string
+
+      # ── 6단계: 백엔드 Salary API 호출 ────────────────────────────────────
+      - invoke:
+          version: 2.0.0
+          title: "백엔드 Salary API 호출"
+          target-url: "http://salary-api:8001$(request.path)"
+          follow-redirects: false
+          timeout: 60
+          verb: keep
+          cache-response: protocol
+          cache-ttl: 900
+          stop-on-error:
+            - ConnectionError
+            - OperationError
+
+    catch:
+      # ── 연결 오류 처리 ────────────────────────────────────────────────────
+      - errors:
+          - ConnectionError
+          - OperationError
+        execute:
+          - set-variable:
+              version: 2.0.0
+              title: "연결 오류 응답"
+              actions:
+                - set: message.status.code
+                  value: 503
+                  type: number
+                - set: message.status.reason
+                  value: "Service Unavailable"
+                  type: string
+                - set: message.body
+                  value: '{"error":"upstream_unavailable","message":"백엔드 서비스 연결 실패"}'
+                  type: string
+
+      # ── JWT 검증 실패 처리 ────────────────────────────────────────────────
+      - errors:
+          - RuntimeError
+        execute:
+          - set-variable:
+              version: 2.0.0
+              title: "JWT 검증 실패 응답"
+              actions:
+                - set: message.status.code
+                  value: 401
+                  type: number
+                - set: message.status.reason
+                  value: "Unauthorized"
+                  type: string
+                - set: message.body
+                  value: '{"error":"invalid_token","message":"토큰이 유효하지 않거나 만료되었습니다."}'
+                  type: string
