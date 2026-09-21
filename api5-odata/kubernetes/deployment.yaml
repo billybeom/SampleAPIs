@@ -1,0 +1,71 @@
+# ── API 5: OData Product Catalog API — Kubernetes Deployment ─────────────────
+# namespace : sample-apis
+# image     : 실제 레지스트리 경로로 교체하세요.
+#   예) ghcr.io/your-org/odata-api:latest
+#       your-registry.example.com/sample-apis/odata-api:latest
+#
+# OpenShift와의 차이:
+#   - ImageStream 없음 (레지스트리 직접 참조)
+#   - imagePullSecrets 추가 (프라이빗 레지스트리 사용 시)
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: odata-api
+  namespace: sample-apis
+  labels:
+    app: odata-api
+    app.kubernetes.io/part-of: sample-apis
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: odata-api
+  template:
+    metadata:
+      labels:
+        app: odata-api
+    spec:
+      # 프라이빗 레지스트리 사용 시 주석 해제하고 secret 이름을 입력하세요.
+      # imagePullSecrets:
+      #   - name: registry-credentials
+      containers:
+        - name: odata-api
+          image: your-registry.example.com/sample-apis/odata-api:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3003
+              protocol: TCP
+          env:
+            - name: PORT
+              value: "3003"
+            - name: NODE_ENV
+              value: "production"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3003
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3003
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities:
+              drop:
+                - ALL
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault

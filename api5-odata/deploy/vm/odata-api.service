@@ -1,0 +1,44 @@
+# /etc/systemd/system/odata-api.service
+#
+# 설치 위치: /etc/systemd/system/odata-api.service
+# 애플리케이션 경로: /opt/sample-apis/api5-odata
+#
+# 활성화:
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now odata-api
+#
+[Unit]
+Description=OData 4.0 Product Catalog REST API (Node.js)
+Documentation=https://github.com/your-org/sample-apis
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=svcapi
+Group=svcapi
+WorkingDirectory=/opt/sample-apis/api5-odata
+
+# 환경변수 파일 (파일이 없어도 서비스는 기동됨)
+EnvironmentFile=-/etc/sample-apis/odata-api.env
+
+# 시작 명령
+ExecStart=/usr/bin/node src/index.js
+
+# 재시작 정책
+Restart=on-failure
+RestartSec=5s
+
+# 로깅 — journald로 수집 (journalctl -u odata-api -f)
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=odata-api
+
+# 보안 강화 옵션
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/tmp
+
+[Install]
+WantedBy=multi-user.target

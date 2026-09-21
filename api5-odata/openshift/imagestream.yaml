@@ -1,0 +1,12 @@
+# OpenShift 내부 레지스트리에 이미지 스트림을 생성합니다.
+# oc new-build 또는 Tekton 파이프라인이 이 ImageStream에 push합니다.
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: odata-api
+  namespace: sample-apis
+  labels:
+    app: odata-api
+spec:
+  lookupPolicy:
+    local: true
