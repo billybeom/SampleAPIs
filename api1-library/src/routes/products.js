@@ -88,7 +88,7 @@ router.post("/", (req, res) => {
   }
 
   // name URL-safe 유효성 검사
-  if (!/^[a-z0-9-]+$%.test(name) && !/^[a-z0-9-]+$/.test(name)) {
+  if (!/^[a-z0-9-]+$/.test(name)) {
     return res.status(400).json({ error: "name은 영문 소문자, 숫자, 하이픈(-)만 포함된 URL-safe 형식이어야 합니다." });
   }
 
