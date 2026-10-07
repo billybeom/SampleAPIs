@@ -54,7 +54,7 @@ async def get_my_salary(current_user: dict = Depends(get_current_user)):
 
 
 @router.get(
-    "/",
+    "",
     summary="List salary records (scope determined by role)",
     description="""
 Returns salary records visible to the caller based on their role:

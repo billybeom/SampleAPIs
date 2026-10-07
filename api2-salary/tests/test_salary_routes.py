@@ -75,7 +75,7 @@ class TestSalaryListEndpoint:
     def test_employee_sees_only_own(self, client, payload_alice):
         """alice(employee) → 본인 레코드만"""
         with patch("app.auth.security.verify_keycloak_token", new=mock_verify(payload_alice)):
-            resp = client.get("/salaries/", headers=auth_header())
+            resp = client.get("/salaries", headers=auth_header())
         assert resp.status_code == 200
         data = resp.json()
         assert data["total"] == 1
@@ -85,7 +85,7 @@ class TestSalaryListEndpoint:
         """carol(manager, engineering) — store에서 carol team = marketing
         → carol은 marketing 팀 레코드만 반환"""
         with patch("app.auth.security.verify_keycloak_token", new=mock_verify(payload_carol)):
-            resp = client.get("/salaries/", headers=auth_header())
+            resp = client.get("/salaries", headers=auth_header())
         assert resp.status_code == 200
         data = resp.json()
         # carol의 department=engineering → engineering 팀 레코드
@@ -95,7 +95,7 @@ class TestSalaryListEndpoint:
     def test_hr_sees_all(self, client, payload_hr):
         """hr_system → 전체 레코드"""
         with patch("app.auth.security.verify_keycloak_token", new=mock_verify(payload_hr)):
-            resp = client.get("/salaries/", headers=auth_header())
+            resp = client.get("/salaries", headers=auth_header())
         assert resp.status_code == 200
         data = resp.json()
         assert data["total"] >= 2  # store에 최소 2개 이상

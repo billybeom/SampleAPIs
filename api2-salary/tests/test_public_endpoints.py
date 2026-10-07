@@ -81,7 +81,7 @@ class TestUnauthenticated:
         assert resp.status_code == 401
 
     def test_get_all_salaries_without_token(self, client):
-        resp = client.get("/salaries/")
+        resp = client.get("/salaries")
         assert resp.status_code == 401
 
     def test_invalid_authorization_header(self, client):

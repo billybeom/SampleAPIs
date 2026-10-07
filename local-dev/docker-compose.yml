@@ -63,7 +63,8 @@ services:
       dockerfile: Dockerfile
     container_name: salary-api
     ports:
-      - "8001:8001"
+      # The image runs uvicorn on 8000 (api2-salary/Dockerfile); keep 8001 on the host as documented.
+      - "8001:8000"
     environment:
       KEYCLOAK_URL: http://keycloak:8080
       KEYCLOAK_REALM: corp
@@ -75,7 +76,8 @@ services:
       keycloak:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8001/health || exit 1"]
+      # python:3.11-slim has no curl; probe the container port with Python instead.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
       interval: 10s
       timeout: 5s
       retries: 5
